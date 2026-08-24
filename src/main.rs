@@ -27,6 +27,7 @@
 //! so the caller can read it off the first word without parsing anything.
 
 use std::io::Read;
+use std::ops::Range;
 
 use serde_json::{json, Value};
 use sqruff_lib::core::config::FluffConfig;
@@ -57,6 +58,30 @@ const MUTATION: [&str; 3] = ["update", "delete", "insert"];
 /// needs, and checked the same way, by parsing what it produced.
 const NEEDS_OPERAND: [&str; 2] = ["describe", "summarize"];
 
+/// Every descendant of `segment` of this kind, `segment` itself included.
+fn crawl(segment: &ErasedSegment, kind: SyntaxKind) -> Vec<ErasedSegment> {
+    segment.recursive_crawl(&SyntaxSet::single(kind), true, &SyntaxSet::EMPTY, true)
+}
+
+/// The child of `segment` of this kind, if it has one.
+fn child(segment: &ErasedSegment, kind: SyntaxKind) -> Option<ErasedSegment> {
+    segment.child(&SyntaxSet::single(kind))
+}
+
+/// Where `segment` sits in the text it was read from.
+fn span(segment: &ErasedSegment) -> Option<Range<usize>> {
+    segment
+        .get_position_marker()
+        .map(|marker| marker.source_slice.clone())
+}
+
+/// The statement in tokens, strings and comments each held whole.
+fn lex(config: &FluffConfig, sql: &str) -> Vec<ErasedSegment> {
+    let tables = Tables::default();
+    let (segments, _errors) = config.get_dialect().lexer().lex(&tables, sql);
+    segments
+}
+
 /// A bare word sitting at paren depth zero, and where it ends -- which is where
 /// the name of a mutation's target has to go.
 struct Word {
@@ -68,40 +93,32 @@ struct Word {
 /// opens with, and what a mutation writes to. Strings and comments never appear
 /// -- the lexer hands those back whole, so a keyword written inside one is not a
 /// keyword to us either.
-struct Scan {
-    words: Vec<Word>,
-}
-
-fn scan(config: &FluffConfig, sql: &str) -> Scan {
-    let lexer = config.get_dialect().lexer();
-    let tables = Tables::default();
-    let (segments, _errors) = lexer.lex(&tables, sql);
-
+fn scan(config: &FluffConfig, sql: &str) -> Vec<Word> {
     let mut words = Vec::new();
     let mut depth = 0usize;
 
-    for segment in &segments {
-        let Some(marker) = segment.get_position_marker() else {
-            continue;
-        };
-        let end = marker.source_slice.end;
-
+    for segment in lex(config, sql) {
         match segment.get_type() {
             SyntaxKind::StartBracket => depth += 1,
             SyntaxKind::EndBracket => depth = depth.saturating_sub(1),
-            SyntaxKind::Word if depth == 0 => words.push(Word {
-                text: segment.raw().to_lowercase(),
-                end,
-            }),
+            SyntaxKind::Word if depth == 0 => {
+                if let Some(at) = span(&segment) {
+                    words.push(Word {
+                        text: segment.raw().to_lowercase(),
+                        end: at.end,
+                    });
+                }
+            }
             _ => {}
         }
     }
 
-    Scan { words }
+    words
 }
 
-fn first_word(scan: &Scan) -> &str {
-    scan.words.first().map_or("", |word| word.text.as_str())
+/// What the statement opens with, lowercased, or "" if it opens with nothing.
+fn first_word(words: &[Word]) -> &str {
+    words.first().map_or("", |word| word.text.as_str())
 }
 
 /// Names `table` as the target of a mutation that left its own out:
@@ -109,11 +126,11 @@ fn first_word(scan: &Scan) -> &str {
 ///
 /// This is the one repair no parser can make for us -- there is no table in the
 /// text to find -- so it happens before anything tries to read the statement.
-fn name_target(sql: &str, scan: &Scan, table: &str) -> String {
-    let Some(head) = scan.words.first() else {
+fn name_target(sql: &str, words: &[Word], table: &str) -> String {
+    let Some(head) = words.first() else {
         return sql.to_string();
     };
-    let next = scan.words.get(1).map(|word| word.text.as_str());
+    let next = words.get(1).map(|word| word.text.as_str());
 
     let addition = match head.text.as_str() {
         "update" if next == Some("set") => format!(" {table}"),
@@ -135,22 +152,14 @@ fn name_target(sql: &str, scan: &Scan, table: &str) -> String {
 /// lexer hands a string literal back whole, so `'-- not a comment'` is left
 /// exactly where it is.
 fn strip_comments(config: &FluffConfig, sql: &str) -> String {
-    let lexer = config.get_dialect().lexer();
-    let tables = Tables::default();
-    let (segments, _errors) = lexer.lex(&tables, sql);
-
     let mut stripped = sql.to_string();
 
     // Back to front, so the ranges still ahead stay valid.
-    for segment in segments.iter().rev() {
-        if !matches!(
-            segment.get_type(),
-            SyntaxKind::InlineComment | SyntaxKind::BlockComment
-        ) {
-            continue;
-        }
-        if let Some(marker) = segment.get_position_marker() {
-            stripped.replace_range(marker.source_slice.clone(), "");
+    for segment in lex(config, sql).iter().rev() {
+        if segment.is_comment() {
+            if let Some(at) = span(segment) {
+                stripped.replace_range(at, "");
+            }
         }
     }
 
@@ -159,36 +168,14 @@ fn strip_comments(config: &FluffConfig, sql: &str) -> String {
 
 /// Where a missing FROM belongs in one SELECT: just past its select clause.
 fn missing_froms(tree: &ErasedSegment) -> Vec<usize> {
-    let selects = tree.recursive_crawl(
-        &SyntaxSet::new(&[SyntaxKind::SelectStatement]),
-        true,
-        &SyntaxSet::EMPTY,
-        true,
-    );
-
-    let mut found = Vec::new();
-    for select in selects {
-        let children = select.segments();
-        if children
-            .iter()
-            .any(|child| child.get_type() == SyntaxKind::FromClause)
-        {
-            continue;
-        }
-
+    crawl(tree, SyntaxKind::SelectStatement)
+        .iter()
+        .filter(|select| child(select, SyntaxKind::FromClause).is_none())
         // The FROM follows the select clause, so the end of that clause is the
         // one position that is right whatever else the statement holds.
-        let clause = children
-            .iter()
-            .find(|child| child.get_type() == SyntaxKind::SelectClause);
-
-        let marker = clause.and_then(|clause| clause.get_position_marker());
-        if let Some(marker) = marker {
-            found.push(marker.source_slice.end);
-        }
-    }
-
-    found
+        .filter_map(|select| child(select, SyntaxKind::SelectClause))
+        .filter_map(|clause| span(&clause).map(|at| at.end))
+        .collect()
 }
 
 /// True when every SELECT in `tree` actually selects something.
@@ -199,38 +186,17 @@ fn missing_froms(tree: &ErasedSegment) -> Vec<usize> {
 /// therefore not yet a tree that can be fixed; one with nothing between SELECT
 /// and the next clause has to be turned down so the next candidate is tried.
 fn projections_are_present(tree: &ErasedSegment) -> bool {
-    let selects = tree.recursive_crawl(
-        &SyntaxSet::new(&[SyntaxKind::SelectStatement]),
-        true,
-        &SyntaxSet::EMPTY,
-        true,
-    );
-
-    selects.iter().all(|select| {
-        select
-            .segments()
-            .iter()
-            .find(|child| child.get_type() == SyntaxKind::SelectClause)
-            .is_some_and(|clause| {
-                clause
-                    .segments()
-                    .iter()
-                    .any(|child| child.get_type() == SyntaxKind::SelectClauseElement)
-            })
+    crawl(tree, SyntaxKind::SelectStatement).iter().all(|select| {
+        child(select, SyntaxKind::SelectClause).is_some_and(|clause| {
+            child(&clause, SyntaxKind::SelectClauseElement).is_some()
+        })
     })
 }
 
 /// True when sqruff could not read part of the statement. Its guess about the
 /// rest is not worth splicing into.
 fn has_unparsable(tree: &ErasedSegment) -> bool {
-    !tree
-        .recursive_crawl(
-            &SyntaxSet::new(&[SyntaxKind::Unparsable]),
-            true,
-            &SyntaxSet::EMPTY,
-            true,
-        )
-        .is_empty()
+    !crawl(tree, SyntaxKind::Unparsable).is_empty()
 }
 
 /// What may be put in front of a statement typed without a SELECT. Nothing
@@ -238,30 +204,134 @@ fn has_unparsable(tree: &ErasedSegment) -> bool {
 /// bare list form, then the bare clause form.
 const PREFIXES: [&str; 3] = ["", "select ", "select * "];
 
-/// The first prefix under which the whole statement reads, with its tree.
+/// The tree sqruff makes of `sql`, however much of it it could read.
+fn parse(linter: &Linter, sql: &str) -> Option<ErasedSegment> {
+    linter.parse_string(&Tables::default(), sql, None).ok()?.tree
+}
+
+/// Whether `tree` is one to finish a statement from: it accounts for all of
+/// `sql`, was read in full, and every SELECT in it actually selects something.
+fn usable(tree: &ErasedSegment, sql: &str) -> bool {
+    covers(tree, sql) && !has_unparsable(tree) && projections_are_present(tree)
+}
+
+/// Whether the tree reaches the end of what it was given.
+///
+/// sqruff stops at the first thing its lexer cannot take -- a non-ASCII letter
+/// in an unquoted identifier, say -- and leaves the rest out of the tree
+/// altogether rather than marking it unreadable. Such a tree looks perfectly
+/// healthy: no unparsable node, a select clause, a projection. Checking that it
+/// ends where the statement ends is what tells the difference, and without it
+/// an offset taken from the tree would be spliced into text the parse never
+/// saw.
+fn covers(tree: &ErasedSegment, sql: &str) -> bool {
+    span(tree).is_some_and(|at| at.end >= sql.len())
+}
+
+/// Somewhere the parse stopped following, and what is missing there.
+struct Repair {
+    at: usize,
+    text: String,
+    /// Whether the text wants a space in front of it. A SELECT going straight
+    /// after a `(` does not; a FROM landing against the word that ended the
+    /// select list does.
+    spaced: bool,
+}
+
+impl Repair {
+    /// Splices the missing text into `sql`, keeping the words either side of it
+    /// apart.
+    fn apply(&self, sql: &mut String) {
+        let joined = self.spaced && !sql[..self.at].ends_with(char::is_whitespace);
+        let text = if joined {
+            format!(" {}", self.text)
+        } else {
+            self.text.clone()
+        };
+        sql.insert_str(self.at, &text);
+    }
+}
+
+/// The first place a statement needs mending, if it needs mending anywhere.
+///
+/// Two shapes, both of which the parse points straight at:
+///
+/// A **select clause holding something unreadable** is a missing FROM. GROUP BY
+/// and HAVING do not end a select list the way WHERE and ORDER BY do, so with
+/// no FROM to end it the list runs on until it reaches a word it cannot take.
+/// That word starts exactly where the FROM belongs.
+///
+/// A **bracket holding something unreadable** is a subquery written without its
+/// SELECT: `(b where c > 1)` parses as far as `b` and no further.
+///
+/// Only the first site is returned. Everything past an unreadable stretch is
+/// held as raw words rather than parsed, so a second site inside one is not
+/// visible until the first has been mended and the statement read again.
+fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
+    let clauses = crawl(tree, SyntaxKind::SelectClause);
+    let brackets = crawl(tree, SyntaxKind::Bracketed);
+
+    let missing_from = clauses.iter().filter_map(unparsable_child).map(|at| Repair {
+        at,
+        text: format!("from {table} "),
+        spaced: true,
+    });
+
+    let missing_select = brackets
+        .iter()
+        .filter(|bracket| unparsable_child(bracket).is_some())
+        .filter_map(|bracket| child(bracket, SyntaxKind::StartBracket))
+        .filter_map(|opened| span(&opened).map(|at| at.end))
+        .map(|at| Repair {
+            at,
+            text: "select ".to_string(),
+            spaced: false,
+        });
+
+    missing_from.chain(missing_select).min_by_key(|site| site.at)
+}
+
+/// Where the first unreadable child of `segment` starts.
+fn unparsable_child(segment: &ErasedSegment) -> Option<usize> {
+    child(segment, SyntaxKind::Unparsable)
+        .and_then(|unreadable| span(&unreadable))
+        .map(|at| at.start)
+}
+
+/// How many times a statement may be mended before we call it unreadable. Each
+/// round fixes one level, and a statement nested deeper than this is not one
+/// anybody typed at a `:Duck` prompt.
+const MAX_REPAIRS: usize = 8;
+
+/// The first prefix under which the statement reads, mending it as far as the
+/// parse will show the way.
 ///
 /// `supply` is the caller's: a statement already opening with a query keyword
 /// must be left as it is, because a keyword this dialect does not know reads
 /// perfectly well as a column name -- `describe` would quietly become
 /// `select describe`.
-fn readable(
+fn completed(
     linter: &Linter,
     statement: &str,
     supply: bool,
-) -> Option<(&'static str, String, ErasedSegment)> {
+    table: &str,
+) -> Option<(&'static str, String, ErasedSegment, usize)> {
     let prefixes: &[&'static str] = if supply { &PREFIXES } else { &PREFIXES[..1] };
 
     for &prefix in prefixes {
-        let candidate = format!("{prefix}{statement}");
-        let tables = Tables::default();
+        let mut candidate = format!("{prefix}{statement}");
 
-        let Ok(parsed) = linter.parse_string(&tables, &candidate, None) else {
-            continue;
-        };
-        let Some(tree) = parsed.tree else { continue };
-
-        if !has_unparsable(&tree) && projections_are_present(&tree) {
-            return Some((prefix, candidate, tree));
+        for repairs in 0..=MAX_REPAIRS {
+            let Some(tree) = parse(linter, &candidate) else {
+                break;
+            };
+            if usable(&tree, &candidate) {
+                return Some((prefix, candidate, tree, repairs));
+            }
+            let Some(site) = repair_site(&tree, table) else {
+                break; // unreadable for a reason no insertion will mend
+            };
+            site.apply(&mut candidate);
         }
     }
 
@@ -270,30 +340,34 @@ fn readable(
 
 fn complete(statement: &str, table: &str) -> Value {
     let config = FluffConfig::from_source("[sqruff]\ndialect = duckdb\n", None);
-    let linter = match Linter::new(config.clone(), None, None, false) {
+    let linter = match Linter::new(config, None, None, false) {
         Ok(linter) => linter,
         Err(why) => return json!({ "ok": false, "error": why }),
     };
+    // Borrowed back rather than kept alongside: cloning it copies the whole
+    // duckdb grammar the linter has just been handed.
+    let config = linter.config();
 
-    let stripped = strip_comments(&config, statement);
+    let stripped = strip_comments(config, statement);
     let trimmed = stripped.trim();
     let statement = if trimmed.is_empty() { "*" } else { trimmed };
 
-    let scanned = scan(&config, statement);
-    let first = first_word(&scanned).to_string();
-    let writes = MUTATION.contains(&first.as_str());
+    let words = scan(config, statement);
+    let first = first_word(&words);
+    let writes = MUTATION.contains(&first);
 
     // A mutation is named before anything reads it, and never prefixed.
-    let mut named = name_target(statement, &scanned, table);
-    let supply = !writes && !OPENING.contains(&first.as_str());
+    let mut named = name_target(statement, &words, table);
+    let supply = !writes && !OPENING.contains(&first);
 
     // A bare DESCRIBE or SUMMARIZE has nothing to work on. Both take a table,
     // and the buffer is one, so name it.
-    if NEEDS_OPERAND.contains(&first.as_str()) && scanned.words.len() == 1 {
+    if NEEDS_OPERAND.contains(&first) && words.len() == 1 {
         named = format!("{named} {table}");
     }
 
-    if let Some((prefix, candidate, tree)) = readable(&linter, &named, supply) {
+    let found = completed(&linter, &named, supply, table);
+    if let Some((prefix, candidate, tree, repairs)) = found {
         let mut insertions = missing_froms(&tree);
         let mut sql = candidate;
         let addition = format!(" from {table}");
@@ -301,15 +375,16 @@ fn complete(statement: &str, table: &str) -> Value {
         // Highest offset first, so each insertion leaves the ones still to come
         // where the parse found them. Tree order will not do: a nested SELECT is
         // crawled after the one holding it but sits earlier in the text.
-        insertions.sort_unstable_by(|a, b| b.cmp(a));
-        for at in &insertions {
+        insertions.sort_unstable();
+        for at in insertions.iter().rev() {
             sql.insert_str(*at, &addition);
         }
 
         return json!({
             "ok": true,
             "sql": sql,
-            "strategy": "parsed",
+            "strategy": if repairs == 0 { "parsed" } else { "repaired" },
+            "repairs": repairs,
             "injected": insertions.len(),
             "supplied": if prefix.is_empty() {
                 Value::Null

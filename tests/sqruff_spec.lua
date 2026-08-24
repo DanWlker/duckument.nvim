@@ -157,13 +157,66 @@ describe('naming what a mutation writes to', function()
   end)
 end)
 
+describe('putting the from where the parse stopped', function()
+  it('finishes a group by, which cannot end a select list itself', function()
+    assert.equals(
+      'select a, count(*) from this group by a',
+      complete('a, count(*) group by a')
+    )
+    assert.equals(
+      'select a from this group by a',
+      complete('select a group by a')
+    )
+  end)
+
+  it('finishes a having the same way', function()
+    assert.equals(
+      'select a from this having count(*) > 1',
+      complete('select a having count(*) > 1')
+    )
+  end)
+
+  it('still reaches the selects nested inside one', function()
+    assert.equals(
+      'select a, (select max(b) from this) as m from this group by a',
+      complete('a, (select max(b)) as m group by a')
+    )
+  end)
+
+  it('supplies a select a subquery was written without', function()
+    -- The bracket parses as far as it can and holds the rest as unreadable,
+    -- which says where the SELECT should have been.
+    assert.equals(
+      'select * from this where a in (select b from this where c > 1)',
+      complete('where a in (b where c > 1)')
+    )
+  end)
+
+  it('mends one level at a time, as each parse reveals the next', function()
+    -- Everything past an unreadable stretch is held as raw words, so the inner
+    -- site does not exist in the tree until the outer one is mended.
+    assert.equals(
+      'select a, count(*) from this group by a '
+        .. 'having a in (select b, count(*) from this group by b)',
+      complete('a, count(*) group by a having a in (select b, count(*) group by b)')
+    )
+  end)
+
+  it('refuses a splice that does not actually help', function()
+    -- The repair is only taken if the result reads. Putting a FROM in front of
+    -- something unreadable for another reason fixes nothing.
+    assert.is_nil(sqruff.complete('select a, xyz!! group by a'))
+    assert.is_nil(sqruff.complete('select from from from'))
+  end)
+end)
+
 describe('turning down what it cannot read', function()
   it('declines rather than guessing', function()
-    -- sqruff's duckdb dialect stops short of these. With nothing behind it,
-    -- saying so is the whole answer.
+    -- sqruff's duckdb dialect has no grammar for these at all, so there is
+    -- nowhere for a FROM to help. Saying so is the whole answer.
     for _, args in ipairs({
-      'a, count(*) group by a',
       'select * qualify rn = 1',
+      'select * from this qualify rn = 1',
       'select * from this tablesample 100 percent',
       'from this select a',
     }) do
@@ -220,5 +273,99 @@ describe('falling back', function()
 
     vim.g.duckquery_parse_binary = saved
     sqruff.reset()
+  end)
+end)
+
+describe('edges', function()
+  it('declines text the lexer stops partway through', function()
+    -- A non-ASCII letter in an unquoted identifier ends sqruff's lexer, and
+    -- the rest is left out of the tree rather than marked unreadable. Without
+    -- the check that the tree reaches the end, an offset taken from it would
+    -- be spliced into text the parse never saw:
+    --     select descripci from thisón, count(*) group by descripción
+    local truncated = 'descripción, count(*) group by descripción'
+    assert.is_nil(sqruff.complete(truncated))
+    assert.is_nil(sqruff.complete('señor, count(*) group by señor'))
+  end)
+
+  it('keeps multibyte the lexer does read', function()
+    assert.equals(
+      "select * from this where note = 'café ☕'",
+      complete("where note = 'café ☕'")
+    )
+    assert.equals(
+      'select "descripción" from this where b > 1',
+      complete('select "descripción" where b > 1')
+    )
+  end)
+
+  it('reads nothing at all as the whole buffer', function()
+    assert.equals('select * from this', complete(''))
+    assert.equals('select * from this', complete('     '))
+    assert.equals('select * from this', complete('-- nothing but a note'))
+  end)
+
+  it('leaves a statement that needs nothing exactly alone', function()
+    for _, given in ipairs({
+      'select * from this where a > 1',
+      'select a, count(*) from this group by a',
+      "select * from read_csv('x.csv')",
+      'delete from this where a = 1',
+    }) do
+      assert.equals(given, complete(given), given)
+    end
+  end)
+
+  it('completes across newlines without flattening them', function()
+    assert.equals(
+      'select a from this\nwhere b > 1',
+      complete('select a\nwhere b > 1')
+    )
+    assert.equals(
+      'select a, count(*)\nfrom this group by a',
+      complete('a, count(*)\ngroup by a')
+    )
+  end)
+
+  it('treats a quoted keyword as the identifier it is', function()
+    assert.equals(
+      'select "group", count(*) from this group by "group"',
+      complete('"group", count(*) group by "group"')
+    )
+    assert.equals(
+      'select "group" from this where "from" > 1',
+      complete('select "group" where "from" > 1')
+    )
+  end)
+
+  it('keeps a trailing semicolon where it was', function()
+    assert.equals('select * from this where a > 1;', complete('where a > 1;'))
+    assert.equals(
+      'select a, count(*) from this group by a;',
+      complete('a, count(*) group by a;')
+    )
+  end)
+
+  it('mends every level of a nest, one parse at a time', function()
+    assert.equals(
+      'select * from this where a in '
+        .. '(select b from this where c in (select d from this where e > 1))',
+      complete('where a in (b where c in (d where e > 1))')
+    )
+  end)
+
+  it('leaves a bracket that reads perfectly well as an expression', function()
+    -- `(d)` is a column in parentheses, not a subquery missing its SELECT.
+    -- Nothing in it is unreadable, so there is nothing to mend and no guess
+    -- to make.
+    assert.equals(
+      'select * from this where a in (select b from this where c in (d))',
+      complete('where a in (b where c in (d))')
+    )
+    assert.equals(
+      'select * from this where a in (1, 2, 3)',
+      complete('where a in (1, 2, 3)')
+    )
+    assert.equals('select count(*) from this', complete('count(*)'))
   end)
 end)

@@ -90,6 +90,19 @@ Nothing can be appended to a statement ending in `-- note` without landing
 inside the note, and duckdb has no use for one anyway. A `--` inside a string
 literal is left alone — the lexer hands those back whole.
 
+When no candidate reads in full, the tree still says where the trouble starts.
+A `GROUP BY` or `HAVING` cannot end a select list the way `WHERE` and `ORDER BY`
+can, so without a FROM the list runs on and swallows them — and the parse marks
+that spot as unreadable. Putting the FROM there and parsing again finishes the
+statement:
+
+```
+a, count(*) group by a   →   select a, count(*) from this group by a
+```
+
+The result has to read afterwards, so a splice that fixes nothing is thrown
+away rather than emitted.
+
 A missing `SELECT` is supplied the same way: try nothing, then `select `, then
 `select * `, and keep the first whose tree is *usable*. Usable means more than
 "it parsed" — `select where amt > 100` parses quite happily, an empty projection
@@ -109,7 +122,6 @@ duckdb dialect stops short of a few things, and those are errors now:
 
 | not read | write it as |
 | --- | --- |
-| `description, sum(amt) group by description` | `… from this group by description` |
 | `select * qualify rn = 1` | — |
 | `select * from this tablesample 10 percent` | — |
 | `from this select a` | `select a from this` |
