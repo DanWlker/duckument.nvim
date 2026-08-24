@@ -43,7 +43,10 @@ describe('reading', function()
       'date,n',
       '2025-10-15,2',
       '2025-10-20,2',
-    }, h.run(bufnr, 'Duck date, count(*) as n group by date order by date'))
+    }, h.run(
+      bufnr,
+      'Duck date, count(*) as n from this group by date order by date'
+    ))
   end)
 
   it('keeps a tsv a tsv on the way back', function()
@@ -53,19 +56,6 @@ describe('reading', function()
       '2\ty',
     })
     assert.same({ 'a\tb', '2\ty' }, h.run(bufnr, 'Duck where a > 1'))
-  end)
-
-  it('joins the buffer to itself', function()
-    local bufnr = h.scratch()
-    assert.same({
-      'date,description,amt,date_1,description_1,amt_1',
-      '2025-10-15,rent,100,2025-10-20,rent,110',
-    }, h.run(
-      bufnr,
-      "Duck select * where date = '2025-10-15' "
-        .. "inner join (select * where date = '2025-10-20') dt "
-        .. 'on this.description = dt.description'
-    ))
   end)
 
   it('reports what duckdb complained about', function()

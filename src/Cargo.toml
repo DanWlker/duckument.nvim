@@ -1,0 +1,19 @@
+[package]
+name = "duckquery-parse"
+version = "0.1.0"
+edition = "2021"
+description = "Parse custom query formats"
+publish = false
+
+[[bin]]
+name = "duckquery-parse"
+path = "main.rs"
+
+[dependencies]
+serde_json = "1"
+sqruff-lib = "0.40"
+sqruff-lib-core = "0.40"
+
+[profile.release]
+opt-level = 3
+strip = true

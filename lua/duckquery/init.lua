@@ -1,16 +1,41 @@
 --- duckquery: run duckdb over the buffer you are looking at.
 ---
 --- The buffer is handed to duckdb as `this` -- saved or not -- the statement is
---- completed by `duckquery.sql`, and the result comes back in the format it
+--- completed by `duckquery.sqruff`, and the result comes back in the format it
 --- went out as, replacing the buffer's contents or, for a query that only
 --- reports on the data, rendering into a scratch window.
 
 local format = require('duckquery.format')
-local sql = require('duckquery.sql')
+local sqruff = require('duckquery.sqruff')
 
 local M = {}
 
 local function err(msg) vim.notify('Duck: ' .. msg, vim.log.levels.ERROR) end
+
+---@param s string
+---@return string quoted SQL string literal
+local function quote(s) return "'" .. s:gsub("'", "''") .. "'" end
+
+--- What a statement does with the buffer: reads it, writes to it, or reports on
+--- it. Only what to do with the result turns on this.
+---@alias DuckqueryKind 'read'|'write'|'inspect'
+
+local kinds = {
+  update = 'write',
+  delete = 'write',
+  insert = 'write',
+  describe = 'inspect',
+  summarize = 'inspect',
+}
+
+--- A completed statement opens with the keyword that decides its kind -- the
+--- binary has already supplied any missing SELECT and named any mutation's
+--- target -- so the first word settles it, and nothing here has to read SQL.
+---@param statement string as the binary completed it
+---@return DuckqueryKind
+local function kind_of(statement)
+  return kinds[(statement:match('^%s*(%a+)') or ''):lower()] or 'read'
+end
 
 --- Resolves what duckdb should read for `bufnr`, dumping unsaved text to a temp
 --- file so the query sees the buffer rather than the file behind it.
@@ -75,7 +100,12 @@ local function prepare(bufnr, args)
     return nil
   end
 
-  local query, kind = sql.expand(args)
+  local query, why = sqruff.complete(args)
+  if not query then
+    err(why or 'could not complete that statement')
+    return nil
+  end
+  local kind = kind_of(query)
 
   return {
     bufnr = bufnr,
@@ -87,7 +117,7 @@ local function prepare(bufnr, args)
     source = ('create or replace temp %s this as select * from %s(%s%s);\n'):format(
       kind == 'write' and 'table' or 'view',
       spec.reader,
-      sql.quote(src),
+      quote(src),
       spec.reader_args or ''
     ),
     query = query,
@@ -175,7 +205,7 @@ function M.query(args, bang)
     .. (job.kind == 'write' and (job.query .. ';\n') or '')
     .. ('copy (%s) to %s (%s);\n'):format(
       job.kind == 'write' and 'select * from this' or job.query,
-      sql.quote(out),
+      quote(out),
       job.spec.copy
     )
 

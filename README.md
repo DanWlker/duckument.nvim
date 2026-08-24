@@ -21,7 +21,9 @@ on disk.
 
 ## Requirements
 
-Neovim 0.11+ and the `duckdb` CLI on your `$PATH`.
+Neovim 0.11+, the `duckdb` CLI on your `$PATH`, and a Rust toolchain to build
+the `duckquery-parse` binary that does the statement completion — `make build`,
+once. See [how the statement gets completed](#how-the-statement-gets-completed).
 
 ## Install
 
@@ -39,9 +41,9 @@ There is nothing to call — no `setup()`, no configuration.
 | `:Duck! {statement}` | The same, without the confirmation a parquet file needs before being rewritten. |
 | `:DuckPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone. |
 
-`:Duck` with no argument reads the whole buffer back through duckdb; a `DESCRIBE`
-renders like `:DuckPreview`, since writing a description of your data over the
-data would be a poor trade.
+`:Duck` with no argument reads the whole buffer back through duckdb. `DESCRIBE`
+and `SUMMARIZE` render like `:DuckPreview`, since writing a description of your
+data over the data would be a poor trade.
 
 ## What gets filled in
 
@@ -58,26 +60,112 @@ wrote it — naming your own `FROM` opts straight out of all of this.
 | `insert values ('a', 1)` | `insert into this values ('a', 1)` |
 | `describe` | `describe from this` |
 
+## How the statement gets completed
+
+All of it happens in `duckquery-parse`, a small Rust binary over
+[sqruff](https://github.com/quarylabs/sqruff). Neovim hands it the string you
+typed and takes back a statement; nothing on the lua side reads your SQL.
+
+What the plugin then does with the result — replace the buffer, write through a
+temp table, or render into a scratch window — turns on the statement's first
+word, which the binary has already settled by supplying any missing `SELECT` and
+naming any mutation's target. So that stays a keyword lookup in lua rather than
+another reading of your SQL.
+
+**From the parse, and only from the parse.** sqruff reads the statement and its
+tree says where the FROM clauses belong. Because it parses leniently and keeps
+every byte it read, the answer is an *offset* — the FROM is spliced in and
+nothing else is touched:
+
+```
+select   A,  b   where  c = 'It''s'   -- note
+select   A,  b from this   where  c = 'It''s'   -- note
+```
+
+No reformatting, no requoting, and no chance of a half-known dialect quietly
+rewriting a construct it did not understand.
+
+Comments are the one exception: they are dropped before any of this starts.
+Nothing can be appended to a statement ending in `-- note` without landing
+inside the note, and duckdb has no use for one anyway. A `--` inside a string
+literal is left alone — the lexer hands those back whole.
+
+A missing `SELECT` is supplied the same way: try nothing, then `select `, then
+`select * `, and keep the first whose tree is *usable*. Usable means more than
+"it parsed" — `select where amt > 100` parses quite happily, an empty projection
+being valid grammar, and would become `select from this where amt > 100`, which
+duckdb rejects. Each candidate's SELECT has to actually select something.
+
+Two repairs happen before any of that, because there is nothing in the text for
+a parser to find: naming the table a mutation writes to (`update set x = 1`),
+and giving a bare `describe` or `summarize` the buffer to work on (`describe` →
+`describe this`). Both are then checked by parsing the result like anything
+else.
+
+### What it will not do
+
+A statement sqruff cannot read in full is turned down, not guessed at. Its
+duckdb dialect stops short of a few things, and those are errors now:
+
+| not read | write it as |
+| --- | --- |
+| `description, sum(amt) group by description` | `… from this group by description` |
+| `select * qualify rn = 1` | — |
+| `select * from this tablesample 10 percent` | — |
+| `from this select a` | `select a from this` |
+
+Clauses also have to be in the order SQL wants them; a join written before the
+clause it should follow is reported by duckdb rather than rearranged.
+
+```
+where amt > 100                    →  select * from this where amt > 100
+a, b                               →  select a, b from this
+update set amt = (select max(amt)) →  update this set amt = (select … from this)
+describe                           →  describe this
+summarize                          →  summarize this
+a, count(*) group by a             →  declined
+```
+
+### Building it
+
+```sh
+make build       # cd src && cargo build --release
+```
+
+The binary is **required** — it is where the completion lives. The plugin looks
+for `src/target/release/duckquery-parse` and then `bin/duckquery-parse` on its
+runtimepath; point `vim.g.duckquery_parse_binary` at one somewhere else.
+
+With `vim.pack`, building on install and update:
+
+```lua
+vim.api.nvim_create_autocmd('PackChanged', {
+  callback = function(ev)
+    if ev.data.spec.name == 'nvim-duckquery' and ev.data.kind ~= 'delete' then
+      local crate = ev.data.path .. '/src'
+      vim.system({ 'cargo', 'build', '--release' }, { cwd = crate }):wait()
+    end
+  end,
+})
+```
+
 Every `SELECT` is completed this way, however deeply nested, so the buffer can be
 joined to itself:
 
 ```vim
-:Duck select * where date = '2025-10-15'
-      inner join (select * where date = '2025-10-20') dt
+:Duck select * inner join (select * where date = '2025-10-20') dt
       on this.description = dt.description
+      where this.date = '2025-10-15'
 ```
-
-That is not valid SQL as typed — the join lands after the clause it should
-precede — but the intent is plain, so the filtered left hand side is folded into
-a derived table that goes on answering to `this`:
 
 ```sql
-select * from (select * from this where date = '2025-10-15') this
-  inner join (select * from this where date = '2025-10-20') dt
-  on this.description = dt.description
+select * from this inner join (select * from this where date = '2025-10-20') dt
+  on this.description = dt.description where this.date = '2025-10-15'
 ```
 
-Ordinary SQL ordering works too.
+Clauses have to be in the order SQL wants them. Nothing here rewrites a
+statement that is merely out of order — duckdb reports that better than a guess
+would.
 
 ## Two things worth knowing
 
@@ -97,7 +185,8 @@ make test     # or ./tests/run_tests.sh
 ```
 
 Runs on [plenary.nvim](https://github.com/nvim-lua/plenary.nvim), cloned into
-your neovim data directory if it is not already installed. `tests/sql_spec.lua`
-covers the statement completion on its own — no duckdb needed — while
-`tests/duckquery_spec.lua` runs the commands end to end against a real one, and
-skips itself when duckdb is missing.
+your neovim data directory if it is not already installed.
+`tests/sqruff_spec.lua` covers the statement completion,
+`tests/duckquery_spec.lua` runs the commands end to end, and
+`tests/format_spec.lua` the buffer detection. The first two skip themselves when
+the binary, or duckdb, is not there.
