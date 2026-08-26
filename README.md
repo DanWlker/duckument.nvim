@@ -1,6 +1,6 @@
 # duckument.nvim
 
-## NOTE: Yes this is vibe coded. Yes I will clean this up. Yes I am in the process of cleaning it up. Yes I'm using this myself. Yes I do review the code, am in the process of reviewing all the code. The rust binary will be in "releases" once I have reviewed everything. In the meantime, `make build` should help.
+## NOTE: Yes this is vibe coded. Yes I will clean this up. Yes I am in the process of cleaning it up. Yes I'm using this myself. Yes I do review the code, am in the process of reviewing all the code. The rust binary will be in "releases" once I have reviewed everything. In the meantime, `make build` should help, or just do `:DuckU!` to bypass the rust binary
 
 Run [DuckDB](https://duckdb.org) over the buffer you are looking at.
 
