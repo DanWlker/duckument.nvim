@@ -192,6 +192,20 @@ describe('putting the from where the parse stopped', function()
     )
   end)
 
+  it('mends every source-less select in one pass', function()
+    -- These are all visible in a single parse, unlike a site hidden inside an
+    -- unreadable stretch, so the repair budget is not spent one per SELECT.
+    assert.equals(
+      'select a from this where b > 1 union select c from this',
+      complete('select a where b > 1 union select c')
+    )
+    assert.equals(
+      'select * from this where a in (select b from this where c in '
+        .. '(select d from this))',
+      complete('where a in (select b where c in (select d))')
+    )
+  end)
+
   it('mends one level at a time, as each parse reveals the next', function()
     -- Everything past an unreadable stretch is held as raw words, so the inner
     -- site does not exist in the tree until the outer one is mended.

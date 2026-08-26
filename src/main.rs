@@ -81,18 +81,6 @@ fn strip_comments(config: &FluffConfig, sql: &str) -> String {
     stripped
 }
 
-/// Where a missing FROM belongs in one SELECT: just past its select clause.
-fn missing_froms(tree: &ErasedSegment) -> Vec<usize> {
-    crawl(tree, SyntaxKind::SelectStatement)
-        .iter()
-        .filter(|select| child(select, SyntaxKind::FromClause).is_none())
-        // The FROM follows the select clause, so the end of that clause is the
-        // one position that is right whatever else the statement holds.
-        .filter_map(|select| child(select, SyntaxKind::SelectClause))
-        .filter_map(|clause| span(&clause).map(|at| at.end))
-        .collect()
-}
-
 /// True when every SELECT in `tree` actually selects something.
 ///
 /// This is the check that makes supplying the SELECT safe. sqruff parses
@@ -131,7 +119,22 @@ fn parse(linter: &Linter, sql: &str) -> Option<ErasedSegment> {
 /// Whether `tree` is one to finish a statement from: it accounts for all of
 /// `sql`, was read in full, and every SELECT in it actually selects something.
 fn usable(tree: &ErasedSegment, sql: &str) -> bool {
-    covers(tree, sql) && !has_unparsable(tree) && projections_are_present(tree)
+    covers(tree, sql)
+        && !has_unparsable(tree)
+        && projections_are_present(tree)
+        && sources_are_named(tree)
+}
+
+/// True when every SELECT in `tree` says what it reads from.
+///
+/// A SELECT without a FROM parses perfectly well -- it is only unfinished, not
+/// unreadable -- so nothing else here would notice. Saying so is what puts the
+/// missing FROM through the same mend-and-parse-again loop as everything else,
+/// rather than being spliced in afterwards and never checked.
+fn sources_are_named(tree: &ErasedSegment) -> bool {
+    crawl(tree, SyntaxKind::SelectStatement)
+        .iter()
+        .all(|select| child(select, SyntaxKind::FromClause).is_some())
 }
 
 /// Whether the tree reaches the end of what it was given.
@@ -236,15 +239,33 @@ fn missing_relation(unreadable: &ErasedSegment, table: &str) -> Option<Repair> {
 /// Only the first site is returned. Everything past an unreadable stretch is
 /// held as raw words rather than parsed, so a second site inside one is not
 /// visible until the first has been mended and the statement read again.
-fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
+fn repair_sites(tree: &ErasedSegment, table: &str) -> Vec<Repair> {
     // A statement that did not parse at all sits unreadable at the root.
     let unnamed = child(tree, SyntaxKind::Unparsable)
         .and_then(|statement| missing_relation(&statement, table));
 
+    let selects = crawl(tree, SyntaxKind::SelectStatement);
     let clauses = crawl(tree, SyntaxKind::SelectClause);
     let brackets = crawl(tree, SyntaxKind::Bracketed);
 
-    let missing_from = clauses
+    // A SELECT that parsed but named no source. Every one of these is visible
+    // in this one parse, so they are all mended together -- but only once
+    // nothing is unreadable: a select list that ran on carries its own repair,
+    // and the end of a runaway list is not where a FROM belongs.
+    let unsourced = selects
+        .iter()
+        .filter(|_| !has_unparsable(tree))
+        .filter(|select| child(select, SyntaxKind::FromClause).is_none())
+        .filter_map(|select| child(select, SyntaxKind::SelectClause))
+        .filter_map(|clause| span(&clause).map(|at| at.end))
+        .map(|at| Repair {
+            at,
+            text: format!("from {table}"),
+            spaced: true,
+        });
+
+    // A select list that ran on past the clause that should have ended it.
+    let overrun = clauses
         .iter()
         .filter_map(unparsable_child)
         .map(|at| Repair {
@@ -253,7 +274,7 @@ fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
             spaced: true,
         });
 
-    let missing_select = brackets
+    let unselected = brackets
         .iter()
         .filter(|bracket| unparsable_child(bracket).is_some())
         .filter_map(|bracket| child(bracket, SyntaxKind::StartBracket))
@@ -264,11 +285,18 @@ fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
             spaced: false,
         });
 
-    unnamed
+    let mut sites: Vec<Repair> = unnamed
         .into_iter()
-        .chain(missing_from)
-        .chain(missing_select)
-        .min_by_key(|site| site.at)
+        .chain(unsourced)
+        .chain(overrun)
+        .chain(unselected)
+        .collect();
+
+    // Highest offset first, so each mend leaves the ones still to come where
+    // the parse found them. Tree order will not do: a nested SELECT is crawled
+    // after the one holding it but sits earlier in the text.
+    sites.sort_by_key(|site| std::cmp::Reverse(site.at));
+    sites
 }
 
 /// Where the first unreadable child of `segment` starts.
@@ -295,7 +323,7 @@ fn completed(
     linter: &Linter,
     statement: &str,
     table: &str,
-) -> Option<(&'static str, String, ErasedSegment, usize)> {
+) -> Option<(&'static str, String, usize)> {
     for &prefix in PREFIXES.iter() {
         let mut candidate = format!("{prefix}{statement}");
 
@@ -304,15 +332,18 @@ fn completed(
                 break;
             };
             if usable(&tree, &candidate) {
-                return Some((prefix, candidate, tree, repairs));
+                return Some((prefix, candidate, repairs));
             }
             if repairs == MAX_REPAIRS {
                 break; // one more mend could not be checked anyway
             }
-            let Some(site) = repair_site(&tree, table) else {
-                break; // unreadable for a reason no insertion will mend
-            };
-            site.apply(&mut candidate);
+            let sites = repair_sites(&tree, table);
+            if sites.is_empty() {
+                break; // unfinished for a reason no insertion will mend
+            }
+            for site in &sites {
+                site.apply(&mut candidate);
+            }
         }
     }
 
@@ -360,7 +391,6 @@ enum Answer {
         sql: String,
         strategy: Strategy,
         repairs: usize,
-        injected: usize,
         /// The SELECT put in front, if one was needed.
         supplied: Option<&'static str>,
     },
@@ -394,32 +424,19 @@ fn complete(statement: &str, table: &str) -> Answer {
     let trimmed = stripped.trim();
     let statement = if trimmed.is_empty() { "*" } else { trimmed };
 
-    let Some((prefix, candidate, tree, repairs)) = completed(&linter, statement, table) else {
+    let Some((prefix, candidate, repairs)) = completed(&linter, statement, table) else {
         return Answer::refused("sqruff could not read the whole statement");
     };
 
-    let mut insertions = missing_froms(&tree);
-    let mut sql = candidate;
-    let addition = format!(" from {table}");
-
-    // Highest offset first, so each insertion leaves the ones still to come
-    // where the parse found them. Tree order will not do: a nested SELECT is
-    // crawled after the one holding it but sits earlier in the text.
-    insertions.sort_unstable();
-    for at in insertions.iter().rev() {
-        sql.insert_str(*at, &addition);
-    }
-
     Answer::Completed {
         ok: true,
-        sql,
+        sql: candidate,
         strategy: if repairs == 0 {
             Strategy::Parsed
         } else {
             Strategy::Repaired
         },
         repairs,
-        injected: insertions.len(),
         supplied: (!prefix.is_empty()).then_some(prefix),
     }
 }
