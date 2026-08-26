@@ -2,7 +2,7 @@ if vim.g.loaded_duckument == 1 then return end
 vim.g.loaded_duckument = 1
 
 vim.api.nvim_create_user_command(
-  'Duck',
+  'DuckU',
   function(opts) require('duckument').query(opts.args, opts.bang) end,
   {
     nargs = '*',
@@ -12,7 +12,7 @@ vim.api.nvim_create_user_command(
 )
 
 vim.api.nvim_create_user_command(
-  'DuckPreview',
+  'DuckUPreview',
   function(opts) require('duckument').preview(opts.args) end,
   {
     nargs = '*',
