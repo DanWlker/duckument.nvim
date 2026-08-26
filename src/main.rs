@@ -35,30 +35,6 @@ use sqruff_lib::core::linter::core::Linter;
 use sqruff_lib_core::dialects::syntax::{SyntaxKind, SyntaxSet};
 use sqruff_lib_core::parser::segments::{ErasedSegment, Tables};
 
-/// Whether a word opens a query on its own, and so must never be offered a
-/// SELECT in front of it: a keyword this dialect has no grammar for reads
-/// perfectly well as a column name, and `describe` would quietly become
-/// `select describe`.
-fn opens_a_query(word: &str) -> bool {
-    matches!(
-        word,
-        "select"
-            | "with"
-            | "from"
-            | "describe"
-            | "summarize"
-            | "pivot"
-            | "unpivot"
-            | "table"
-            | "values"
-    )
-}
-
-/// Whether a word starts a statement that writes rather than reads.
-fn mutates(word: &str) -> bool {
-    matches!(word, "update" | "delete" | "insert")
-}
-
 /// Every descendant of `segment` of this kind, `segment` itself included.
 fn crawl(segment: &ErasedSegment, kind: SyntaxKind) -> Vec<ErasedSegment> {
     segment.recursive_crawl(&SyntaxSet::single(kind), true, &SyntaxSet::EMPTY, true)
@@ -81,29 +57,6 @@ fn lex(config: &FluffConfig, sql: &str) -> Vec<ErasedSegment> {
     let tables = Tables::default();
     let (segments, _errors) = config.get_dialect().lexer().lex(&tables, sql);
     segments
-}
-
-/// What the statement opens with, lowercased, or "" if it opens with nothing.
-///
-/// The only thing read from the text rather than the parse, and only because it
-/// decides what may be *put in front of* the statement before there is a parse
-/// to read. Strings and comments never answer -- the lexer hands those back
-/// whole, so a keyword written inside one is not a keyword here either. Nor
-/// does anything inside brackets: `(select max(amt)) as peak` opens a select
-/// *list*, not a query, and refusing it a prefix leaves it unreadable.
-fn opening_word(config: &FluffConfig, sql: &str) -> String {
-    let mut depth = 0usize;
-
-    for segment in lex(config, sql) {
-        match segment.get_type() {
-            SyntaxKind::StartBracket => depth += 1,
-            SyntaxKind::EndBracket => depth = depth.saturating_sub(1),
-            SyntaxKind::Word if depth == 0 => return segment.raw().to_lowercase(),
-            _ => {}
-        }
-    }
-
-    String::new()
 }
 
 /// Everything but the comments.
@@ -333,19 +286,17 @@ const MAX_REPAIRS: usize = 8;
 /// The first prefix under which the statement reads, mending it as far as the
 /// parse will show the way.
 ///
-/// `supply` is the caller's: a statement already opening with a query keyword
-/// must be left as it is, because a keyword this dialect does not know reads
-/// perfectly well as a column name -- `describe` would quietly become
-/// `select describe`.
+/// Nothing about the statement is decided before it is parsed. One that already
+/// reads takes the empty prefix and is never touched; one that does not is
+/// offered a SELECT, and what comes of that must parse like anything else. A
+/// statement this dialect has no grammar for -- PIVOT, TABLE -- is refused, or
+/// completes into something duckdb then names the offending keyword in.
 fn completed(
     linter: &Linter,
     statement: &str,
-    supply: bool,
     table: &str,
 ) -> Option<(&'static str, String, ErasedSegment, usize)> {
-    let prefixes: &[&'static str] = if supply { &PREFIXES } else { &PREFIXES[..1] };
-
-    for &prefix in prefixes {
+    for &prefix in PREFIXES.iter() {
         let mut candidate = format!("{prefix}{statement}");
 
         for repairs in 0..=MAX_REPAIRS {
@@ -443,14 +394,7 @@ fn complete(statement: &str, table: &str) -> Answer {
     let trimmed = stripped.trim();
     let statement = if trimmed.is_empty() { "*" } else { trimmed };
 
-    // The one thing decided before there is a parse to read: whether a SELECT
-    // may be put in front. Everything a statement is missing *within* itself is
-    // found by parsing it and mending what the parse points at.
-    let opening = opening_word(config, statement);
-    let supply = !opens_a_query(&opening) && !mutates(&opening);
-
-    let Some((prefix, candidate, tree, repairs)) = completed(&linter, statement, supply, table)
-    else {
+    let Some((prefix, candidate, tree, repairs)) = completed(&linter, statement, table) else {
         return Answer::refused("sqruff could not read the whole statement");
     };
 

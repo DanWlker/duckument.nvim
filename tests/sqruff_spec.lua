@@ -219,6 +219,7 @@ describe('turning down what it cannot read', function()
       'select * from this qualify rn = 1',
       'select * from this tablesample 100 percent',
       'from this select a',
+      'pivot this on description using sum(amt)',
     }) do
       local completed, why = sqruff.complete(args)
       assert.is_nil(completed, args)
@@ -372,7 +373,23 @@ describe('edges', function()
     -- A statement that already says what it acts on is unreadable for some
     -- other reason, and wedging a second relation into it mends nothing.
     assert.is_nil(sqruff.complete('update t set x = 1 group by y'))
-    assert.is_nil(sqruff.complete('describe foo bar'))
+  end)
+
+  it('leaves a statement this dialect cannot read to duckdb', function()
+    -- Nothing is decided about a statement before it is parsed, so a keyword
+    -- sqruff has no grammar for is offered a SELECT like anything else and
+    -- read as a column name. The completion is not what was meant, but it is
+    -- not silent either: duckdb answers `syntax error at or near "table"`,
+    -- naming the word, which beats refusing it here without saying which.
+    assert.equals('select table this from this', complete('table this'))
+    assert.equals(
+      'select describe foo from this bar',
+      complete('describe foo bar')
+    )
+  end)
+
+  it('completes a from-first statement it can read', function()
+    assert.equals('select * from t', complete('from t'))
   end)
 
   it('does not take a relation keyword out of a bracket either', function()
