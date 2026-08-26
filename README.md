@@ -1,5 +1,7 @@
 # duckument.nvim
 
+## NOTE: Yes this is vibe coded. Yes I will clean this up. Yes I am in the process of cleaning it up. Yes I'm using this myself. Yes I reviewed the generated code.
+
 Run [DuckDB](https://duckdb.org) over the buffer you are looking at.
 
 Your buffer is the table. Write the interesting half of a statement and the rest
