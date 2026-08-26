@@ -156,22 +156,27 @@ fn covers(tree: &ErasedSegment, sql: &str) -> bool {
 struct Repair {
     at: usize,
     text: String,
-    /// Whether the text wants a space in front of it. A SELECT going straight
-    /// after a `(` does not; a FROM landing against the word that ended the
-    /// select list does.
-    spaced: bool,
 }
 
 impl Repair {
-    /// Splices the missing text into `sql`, keeping the words either side of it
-    /// apart.
+    /// Splices the missing text into `sql`, keeping it apart from the words
+    /// either side of it -- and only from words. An opening bracket is already
+    /// a separator, and punctuation on the far side needs none, so neither
+    /// gains a space it did not have.
     fn apply(&self, sql: &mut String) {
-        let joined = self.spaced && !sql[..self.at].ends_with(char::is_whitespace);
-        let text = if joined {
-            format!(" {}", self.text)
-        } else {
-            self.text.clone()
-        };
+        let (before, after) = (&sql[..self.at], &sql[self.at..]);
+
+        let mut text = String::with_capacity(self.text.len() + 2);
+        // Anything but a separator on the left wants one; only a word on the
+        // right does, since punctuation there needs no room.
+        if !before.is_empty() && !before.ends_with([' ', '\t', '\n', '(']) {
+            text.push(' ');
+        }
+        text.push_str(&self.text);
+        if after.starts_with(|c: char| c.is_alphanumeric() || "_\"'".contains(c)) {
+            text.push(' ');
+        }
+
         sql.insert_str(self.at, &text);
     }
 }
@@ -219,7 +224,6 @@ fn missing_relation(unreadable: &ErasedSegment, table: &str) -> Option<Repair> {
     Some(Repair {
         at: span(head)?.end,
         text,
-        spaced: true,
     })
 }
 
@@ -247,33 +251,21 @@ fn repair_sites(tree: &ErasedSegment, table: &str) -> Vec<Repair> {
         .and_then(|statement| missing_relation(&statement, table));
 
     let selects = crawl(tree, SyntaxKind::SelectStatement);
-    let clauses = crawl(tree, SyntaxKind::SelectClause);
     let brackets = crawl(tree, SyntaxKind::Bracketed);
 
-    // A SELECT that parsed but named no source. Every one of these is visible
-    // in this one parse, so they are all mended together -- but only once
-    // nothing is unreadable: a select list that ran on carries its own repair,
-    // and the end of a runaway list is not where a FROM belongs.
+    // A SELECT that named no source. The FROM goes where the select list
+    // actually ended: at the word the list could not take, if it ran on past
+    // the clause that should have stopped it, and at the end of the clause
+    // otherwise -- a runaway clause ends where the statement does, which is not
+    // where a FROM belongs.
     let unsourced = selects
         .iter()
-        .filter(|_| !has_unparsable(tree))
         .filter(|select| child(select, SyntaxKind::FromClause).is_none())
         .filter_map(|select| child(select, SyntaxKind::SelectClause))
-        .filter_map(|clause| span(&clause).map(|at| at.end))
+        .filter_map(|clause| unparsable_child(&clause).or_else(|| span(&clause).map(|at| at.end)))
         .map(|at| Repair {
             at,
             text: format!("from {table}"),
-            spaced: true,
-        });
-
-    // A select list that ran on past the clause that should have ended it.
-    let overrun = clauses
-        .iter()
-        .filter_map(unparsable_child)
-        .map(|at| Repair {
-            at,
-            text: format!("from {table} "),
-            spaced: true,
         });
 
     let unselected = brackets
@@ -283,14 +275,12 @@ fn repair_sites(tree: &ErasedSegment, table: &str) -> Vec<Repair> {
         .filter_map(|opened| span(&opened).map(|at| at.end))
         .map(|at| Repair {
             at,
-            text: "select ".to_string(),
-            spaced: false,
+            text: "select".to_string(),
         });
 
     let mut sites: Vec<Repair> = unnamed
         .into_iter()
         .chain(unsourced)
-        .chain(overrun)
         .chain(unselected)
         .collect();
 
