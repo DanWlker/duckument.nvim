@@ -28,10 +28,11 @@ local kinds = {
   summarize = 'inspect',
 }
 
---- A completed statement opens with the keyword that decides its kind -- the
---- binary has already supplied any missing SELECT and named any mutation's
---- target -- so the first word settles it, and nothing here has to read SQL.
----@param statement string as the binary completed it
+--- A statement bound for duckdb opens with the keyword that decides its kind:
+--- completed, the binary has already supplied any missing SELECT and named any
+--- mutation's target; written out in full, it says so itself. Either way the
+--- first word settles it, and nothing here has to read SQL.
+---@param statement string as it will be run
 ---@return DuckumentKind
 local function kind_of(statement)
   return kinds[(statement:match('^%s*(%a+)') or ''):lower()] or 'read'
@@ -68,10 +69,15 @@ end
 ---@field kind DuckumentKind
 
 --- Everything a command needs before shelling out, or nil after reporting why.
+---
+--- `raw` hands the statement to duckdb exactly as typed. The buffer is still
+--- `this`, so the only difference is that nothing is filled in: write the whole
+--- statement, and duckdb reports on it rather than the completion doing.
 ---@param bufnr integer
 ---@param args string
+---@param raw? boolean
 ---@return DuckumentJob?
-local function prepare(bufnr, args)
+local function prepare(bufnr, args, raw)
   if vim.fn.executable('duckdb') ~= 1 then
     err('duckdb executable not found in $PATH')
     return nil
@@ -89,10 +95,14 @@ local function prepare(bufnr, args)
     return nil
   end
 
-  local query, why = ducktape.complete(args)
-  if not query then
-    err(why or 'could not complete that statement')
-    return nil
+  local query = args
+  if not raw then
+    local unfinished
+    query, unfinished = ducktape.complete(args)
+    if not query then
+      err(unfinished or 'could not complete that statement')
+      return nil
+    end
   end
   local kind = kind_of(query)
 
@@ -164,10 +174,13 @@ end
 --- Runs `args` over the current buffer and replaces its contents with the
 --- result. The buffer is only ever changed in memory, so `u` puts it back and
 --- the file on disk is untouched until you write it.
+---
+--- `raw` runs the statement as typed, without completing it first.
 ---@param args string
-function M.query(args)
+---@param raw? boolean
+function M.query(args, raw)
   local bufnr = vim.api.nvim_get_current_buf()
-  local job = prepare(bufnr, args)
+  local job = prepare(bufnr, args, raw)
   if not job then return end
 
   -- Nothing to replace the buffer with: DESCRIBE reports on the data instead
@@ -200,9 +213,12 @@ end
 
 --- Runs `args` over the current buffer and renders the result in a scratch
 --- window, leaving the buffer itself untouched.
+---
+--- `raw` runs the statement as typed, without completing it first.
 ---@param args string
-function M.preview(args)
-  local job = prepare(vim.api.nvim_get_current_buf(), args)
+---@param raw? boolean
+function M.preview(args, raw)
+  local job = prepare(vim.api.nvim_get_current_buf(), args, raw)
   if job then show(job) end
 end
 

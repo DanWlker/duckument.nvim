@@ -137,6 +137,66 @@ describe('inspecting', function()
   end)
 end)
 
+describe('running a statement as typed', function()
+  local bufnr
+  before_each(function() bufnr = h.scratch() end)
+
+  it(
+    'takes the whole statement from you, buffer and all',
+    function()
+      assert.same(
+        {
+          'description,amt',
+          'rent,100',
+          'rent,110',
+        },
+        h.run(
+          bufnr,
+          "DuckU! select description, amt from this where description = 'rent'"
+        )
+      )
+    end
+  )
+
+  it('fills nothing in, so duckdb sees exactly what was typed', function()
+    -- Without the bang this completes to `select * from this where amt > 40`.
+    -- With it, the missing FROM is duckdb's problem, and duckdb says so.
+    local message = h.await('DuckU! where amt > 40')
+    assert.is_truthy(message:match('Error'))
+    -- The buffer is left as it was, the statement never having run.
+    assert.same(h.rows, h.lines(bufnr))
+  end)
+
+  it('does not go near the binary at all', function()
+    local saved = vim.g.duckument_parse_binary
+    -- Nothing to complete with: a raw statement must not need one.
+    vim.g.duckument_parse_binary = '/nonexistent/ducktape'
+    require('duckument.ducktape').reset()
+
+    assert.same({ 'n', '4' }, h.run(bufnr, 'DuckU! select count(*) as n from this'))
+
+    vim.g.duckument_parse_binary = saved
+    require('duckument.ducktape').reset()
+  end)
+
+  it('still works out what to do with the result from the first word', function()
+    h.run(bufnr, "DuckU! update this set description = 'housing' where amt = 110")
+    assert.same({
+      'date,description,amt',
+      '2025-10-15,rent,100',
+      '2025-10-15,food,20',
+      '2025-10-20,housing,110',
+      '2025-10-20,gas,50',
+    }, h.lines(bufnr))
+  end)
+
+  it('previews as typed too, leaving the buffer alone', function()
+    local rendered = h.render("DuckUPreview! select 'hello' as greeting")
+    assert.is_truthy(table.concat(rendered, '\n'):match('hello'))
+    assert.same(h.rows, h.lines(bufnr))
+  end)
+end)
+
 describe('unsupported buffers', function()
   it('says so rather than guessing', function()
     vim.cmd('enew!')

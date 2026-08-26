@@ -45,10 +45,19 @@ There is no `setup()` to call, and nothing that has to be configured.
 | --------------------------- | -------------------------------------------------------------------------- |
 | `:DuckU {statement}`        | Runs the statement and replaces the buffer with the result. `u` undoes it. |
 | `:DuckUPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone.      |
+| `!` on either               | Runs the statement exactly as typed, with nothing filled in.               |
 
 `:DuckU` with no argument reads the whole buffer back through duckdb. `DESCRIBE`
 and `SUMMARIZE` render like `:DuckUPreview`, since writing a description of your
 data over the data would be a poor trade.
+
+`!` turns the completion off. Your buffer is still `this`, but the statement is
+yours to write in full, and duckdb is the only thing reading it:
+
+```vim
+:DuckU  where amt > 100                      " completed for you
+:DuckU! select * from this where amt > 100   " run as typed
+```
 
 ## What gets filled in
 
@@ -145,13 +154,16 @@ would.
 ### What it will not do
 
 A statement sqruff cannot read in full is turned down, not guessed at. Its
-duckdb dialect stops short of a few things, and those are errors now:
+duckdb dialect stops short of a few things:
 
 | not read                                    | write it as          |
 | ------------------------------------------- | -------------------- |
-| `select * qualify rn = 1`                   | —                    |
-| `select * from this tablesample 10 percent` | —                    |
+| `select * qualify rn = 1`                   | `:DuckU!`            |
+| `select * from this tablesample 10 percent` | `:DuckU!`            |
 | `from this select a`                        | `select a from this` |
+
+None of these is a limit of duckdb — only of the parser filling your statement
+in — so `!` runs them, the completion being the only thing in the way.
 
 Clauses also have to be in the order SQL wants them; a join written before the
 clause it should follow is reported by duckdb rather than rearranged.
@@ -159,10 +171,11 @@ clause it should follow is reported by duckdb rather than rearranged.
 ```
 where amt > 100                    →  select * from this where amt > 100
 a, b                               →  select a, b from this
+a, count(*) group by a             →  select a, count(*) from this group by a
 update set amt = (select max(amt)) →  update this set amt = (select … from this)
 describe                           →  describe this
 summarize                          →  summarize this
-a, count(*) group by a             →  declined
+select * qualify rn = 1            →  declined; :DuckU! runs it as typed
 ```
 
 ## Getting the binary
