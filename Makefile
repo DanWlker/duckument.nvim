@@ -9,9 +9,11 @@ test:
 
 lint:
 	@stylua --check lua plugin tests
+	@cd src && cargo fmt --check && cargo clippy --release -- -D warnings
 
 format:
 	@stylua lua plugin tests
+	@cd src && cargo fmt
 
 clean:
 	@cd src && cargo clean

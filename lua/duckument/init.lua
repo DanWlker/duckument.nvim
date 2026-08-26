@@ -50,17 +50,6 @@ local function source_for(bufnr, spec)
 
   if on_disk and not vim.bo[bufnr].modified then return name end
 
-  if spec.binary then
-    -- A binary buffer holds bytes neovim has already mangled, so the file on
-    -- disk is the only faithful copy of it.
-    if not on_disk then return nil, nil, 'binary buffers must exist on disk' end
-    vim.notify(
-      'Duck: buffer is modified, querying the file on disk',
-      vim.log.levels.WARN
-    )
-    return name
-  end
-
   local temp = vim.fn.tempname() .. '.' .. spec.ext
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   if vim.fn.writefile(lines, temp) ~= 0 then
@@ -90,7 +79,7 @@ local function prepare(bufnr, args)
 
   local spec = format.detect(bufnr)
   if not spec then
-    err('unsupported filetype (expected csv, tsv, json or parquet)')
+    err('unsupported filetype (expected csv, tsv, json or ndjson)')
     return nil
   end
 
@@ -173,11 +162,10 @@ local function show(job)
 end
 
 --- Runs `args` over the current buffer and replaces its contents with the
---- result. `bang` skips the confirmation a binary format needs, since its
---- result can only be written straight to disk.
+--- result. The buffer is only ever changed in memory, so `u` puts it back and
+--- the file on disk is untouched until you write it.
 ---@param args string
----@param bang? boolean
-function M.query(args, bang)
+function M.query(args)
   local bufnr = vim.api.nvim_get_current_buf()
   local job = prepare(bufnr, args)
   if not job then return end
@@ -185,18 +173,6 @@ function M.query(args, bang)
   -- Nothing to replace the buffer with: DESCRIBE reports on the data instead
   -- of returning it, so it renders like a preview.
   if job.kind == 'inspect' then return show(job) end
-
-  -- Text results land in the buffer, where u still works. Binary ones can only
-  -- go straight to disk, so they get a confirmation instead.
-  if job.spec.binary and not bang then
-    local prompt = ('Overwrite %s on disk with the query result?'):format(
-      vim.fn.fnamemodify(job.src, ':t')
-    )
-    if vim.fn.confirm(prompt, '&Yes\n&No', 2) ~= 1 then
-      if job.temp then os.remove(job.temp) end
-      return
-    end
-  end
 
   local out = vim.fn.tempname() .. '.' .. job.spec.ext
   -- A mutation leaves its result in the table, so it runs first and the whole
@@ -215,21 +191,10 @@ function M.query(args, bang)
       return
     end
 
-    if job.spec.binary then
-      local ok, why = vim.uv.fs_copyfile(out, job.src)
-      os.remove(out)
-      if not ok then
-        err('could not replace ' .. job.src .. ': ' .. (why or '?'))
-        return
-      end
-      vim.api.nvim_buf_call(bufnr, function() vim.cmd.edit({ bang = true }) end)
-      vim.notify('Duck: rewrote ' .. vim.fn.fnamemodify(job.src, ':t'))
-    else
-      local lines = vim.fn.readfile(out)
-      os.remove(out)
-      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-      vim.notify(('Duck: %d line%s'):format(#lines, #lines == 1 and '' or 's'))
-    end
+    local lines = vim.fn.readfile(out)
+    os.remove(out)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    vim.notify(('Duck: %d line%s'):format(#lines, #lines == 1 and '' or 's'))
   end)
 end
 

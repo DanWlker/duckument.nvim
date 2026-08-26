@@ -7,7 +7,6 @@
 ---@field reader string       duckdb table function used to read the source
 ---@field reader_args? string extra arguments for that table function
 ---@field copy string         COPY ... TO options used to write the result
----@field binary? boolean     true when the result cannot live in the buffer as text
 
 local M = {}
 
@@ -30,12 +29,6 @@ M.formats = {
     reader = 'read_json_auto',
     copy = 'FORMAT json, ARRAY false',
   },
-  parquet = {
-    ext = 'parquet',
-    reader = 'read_parquet',
-    copy = 'FORMAT parquet',
-    binary = true,
-  },
 }
 
 local by_ext = {
@@ -45,8 +38,6 @@ local by_ext = {
   json = M.formats.json,
   jsonl = M.formats.ndjson,
   ndjson = M.formats.ndjson,
-  parquet = M.formats.parquet,
-  pq = M.formats.parquet,
 }
 
 local by_filetype = {
@@ -57,8 +48,9 @@ local by_filetype = {
   ndjson = M.formats.ndjson,
 }
 
---- What `bufnr` holds: its extension decides, since that is what a parquet
---- buffer has to go on, and its filetype is the fallback for everything else.
+--- What `bufnr` holds: its extension decides, being the more specific of the
+--- two -- a `.tsv` opened as `csv` is still tab-separated -- and its filetype is
+--- the fallback for a buffer whose name says nothing.
 ---@param bufnr integer
 ---@return DuckumentFormat?
 function M.detect(bufnr)

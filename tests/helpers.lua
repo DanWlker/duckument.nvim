@@ -90,17 +90,6 @@ function M.render(cmd)
   return rendered
 end
 
---- Everything duckdb reports for `query` against `path`, as one string.
----@param path string
----@param query string
----@return string
-function M.read_back(path, query)
-  local cmd = { 'duckdb', '-bail', '-list', '-c', query:format(path) }
-  local res = vim.system(cmd, { text = true }):wait()
-  assert.equals(0, res.code, res.stderr)
-  return vim.trim(res.stdout)
-end
-
 --- Skips the calling spec when duckdb is not installed.
 ---@return boolean
 function M.has_duckdb() return vim.fn.executable('duckdb') == 1 end

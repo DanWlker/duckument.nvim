@@ -1,4 +1,4 @@
-# nvim-duckument
+# duckument.nvim
 
 Run [DuckDB](https://duckdb.org) over the buffer you are looking at.
 
@@ -8,41 +8,44 @@ the result comes back in the format it went out as, replacing the buffer's
 contents.
 
 ```vim
-:Duck where region = 'APAC'
-:Duck date, sum(amt) as total group by date order by date
-:Duck update set region = 'EMEA' where region = 'EU'
-:Duck delete where amt is null
-:Duck describe
+:DuckU where region = 'APAC'
+:DuckU date, sum(amt) as total group by date order by date
+:DuckU update set region = 'EMEA' where region = 'EU'
+:DuckU delete where amt is null
+:DuckU describe
 ```
 
-Works on csv, tsv, json, ndjson and parquet, saved or not: an unsaved or
-modified text buffer is handed to duckdb as it appears on screen, not as it sits
-on disk.
+Works on csv, tsv, json and ndjson, saved or not: an unsaved or modified buffer
+is handed to duckdb as it appears on screen, not as it sits on disk. Every
+result lands back in the buffer, so `u` undoes it and the file is untouched
+until you `:w`.
 
 ## Requirements
 
-Neovim 0.11+, the `duckdb` CLI on your `$PATH`, and a Rust toolchain to build
-the `ducktape` binary that does the statement completion — `make build`,
-once. See [how the statement gets completed](#how-the-statement-gets-completed).
+Neovim 0.11+ and the `duckdb` CLI on your `$PATH`.
+
+The statement completion lives in `ducktape`, a small Rust binary. Installing a
+tagged version fetches the build for your platform the first time you run a
+command; installing from `main` means building it yourself, which wants a Rust
+toolchain and one `make build`. See [getting the binary](#getting-the-binary).
 
 ## Install
 
 ```lua
-vim.pack.add({ 'https://github.com/DanWlker/nvim-duckument' })
+vim.pack.add({ 'https://github.com/DanWlker/duckument.nvim' })
 ```
 
-There is nothing to call — no `setup()`, no configuration.
+There is no `setup()` to call, and nothing that has to be configured.
 
 ## Commands
 
-| Command                    | What it does                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `:Duck {statement}`        | Runs the statement and replaces the buffer with the result. `u` undoes it.      |
-| `:Duck! {statement}`       | The same, without the confirmation a parquet file needs before being rewritten. |
-| `:DuckPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone.           |
+| Command                     | What it does                                                               |
+| --------------------------- | -------------------------------------------------------------------------- |
+| `:DuckU {statement}`        | Runs the statement and replaces the buffer with the result. `u` undoes it. |
+| `:DuckUPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone.      |
 
-`:Duck` with no argument reads the whole buffer back through duckdb. `DESCRIBE`
-and `SUMMARIZE` render like `:DuckPreview`, since writing a description of your
+`:DuckU` with no argument reads the whole buffer back through duckdb. `DESCRIBE`
+and `SUMMARIZE` render like `:DuckUPreview`, since writing a description of your
 data over the data would be a poor trade.
 
 ## What gets filled in
@@ -119,6 +122,24 @@ this`). The keyword has to open the statement, not merely appear first inside a
 bracket, or `(delete where y > 1)` — a subquery written without its SELECT —
 would be read as a DELETE.
 
+Every `SELECT` is completed this way, however deeply nested, so the buffer can be
+joined to itself:
+
+```vim
+:DuckU select * inner join (select * where date = '2025-10-20') dt
+      on this.description = dt.description
+      where this.date = '2025-10-15'
+```
+
+```sql
+select * from this inner join (select * from this where date = '2025-10-20') dt
+  on this.description = dt.description where this.date = '2025-10-15'
+```
+
+Clauses have to be in the order SQL wants them. Nothing here rewrites a
+statement that is merely out of order — duckdb reports that better than a guess
+would.
+
 ### What it will not do
 
 A statement sqruff cannot read in full is turned down, not guessed at. Its
@@ -142,22 +163,38 @@ summarize                          →  summarize this
 a, count(*) group by a             →  declined
 ```
 
-### Building it
+## Getting the binary
+
+The binary is **required** — it is where the completion lives — and there are
+two ways to have one.
+
+**A tagged install fetches it.** Every release publishes a `ducktape` build per
+platform. When your checkout sits exactly on one of those tags, the first
+command that needs the binary and cannot find it fetches that release's build in
+the background and says so when it lands; run the command again and it works.
+Nothing blocks on the download, and nothing is fetched again afterwards.
+
+Builds are published for:
+
+|         | x86_64             | aarch64            |
+| ------- | ------------------ | ------------------ |
+| macOS   | ✓                  | ✓                  |
+| Linux   | ✓ (glibc and musl) | ✓ (glibc and musl) |
+| Windows | ✓                  | ✓                  |
+
+**Anything else builds it.** A checkout on `main`, or on a platform with no
+published build, has no release to match and is told to build instead:
 
 ```sh
 make build       # cd src && cargo build --release
 ```
 
-The binary is **required** — it is where the completion lives. The plugin looks
-for `src/target/release/ducktape` and then `bin/ducktape` on its
-runtimepath; point `vim.g.duckument_parse_binary` at one somewhere else.
-
-With `vim.pack`, building on install and update:
+With `vim.pack`, on install and update:
 
 ```lua
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
-    if ev.data.spec.name == 'nvim-duckument' and ev.data.kind ~= 'delete' then
+    if ev.data.spec.name == 'duckument.nvim' and ev.data.kind ~= 'delete' then
       local crate = ev.data.path .. '/src'
       vim.system({ 'cargo', 'build', '--release' }, { cwd = crate }):wait()
     end
@@ -165,30 +202,21 @@ vim.api.nvim_create_autocmd('PackChanged', {
 })
 ```
 
-Every `SELECT` is completed this way, however deeply nested, so the buffer can be
-joined to itself:
+Both end up in the same place, `src/target/release/ducktape`, and a binary you
+built is never replaced by a downloaded one: no version stamp beside it means
+cargo put it there, and that build is the one you meant to run.
 
-```vim
-:Duck select * inner join (select * where date = '2025-10-20') dt
-      on this.description = dt.description
-      where this.date = '2025-10-15'
-```
+If none of this suits, these are the knobs:
 
-```sql
-select * from this inner join (select * from this where date = '2025-10-20') dt
-  on this.description = dt.description where this.date = '2025-10-15'
-```
+|                                |                                                                         |
+| ------------------------------ | ----------------------------------------------------------------------- |
+| `vim.g.duckument_parse_binary` | Path to a `ducktape` of your own. `false` disables the lookup entirely. |
+| `vim.g.duckument_download`     | `false` to never fetch, and only ever build.                            |
+| `vim.g.duckument_version`      | Fetch this release rather than the tag you are on.                      |
+| `vim.g.duckument_triple`       | Fetch this target triple rather than the detected one.                  |
+| `vim.g.duckument_repo`         | Fetch from this `owner/repo` — for a fork.                              |
 
-Clauses have to be in the order SQL wants them. Nothing here rewrites a
-statement that is merely out of order — duckdb reports that better than a guess
-would.
-
-## Two things worth knowing
-
-**Parquet is rewritten in place.** A parquet result cannot live in the buffer as
-text, so it goes straight to the file on disk and the buffer reloads — there is
-no undo. `:Duck` asks first; `:Duck!` does not. Every text format lands in the
-buffer instead, unsaved until you `:w`, and undoes normally.
+## One thing worth knowing
 
 **Row order after an `UPDATE` is duckdb's to decide.** In practice rows stay
 exactly where they were, on hundreds of thousands of rows too, but nothing in
@@ -203,6 +231,8 @@ make test     # or ./tests/run_tests.sh
 Runs on [plenary.nvim](https://github.com/nvim-lua/plenary.nvim), cloned into
 your neovim data directory if it is not already installed.
 `tests/ducktape_spec.lua` covers the statement completion,
-`tests/duckument_spec.lua` runs the commands end to end, and
-`tests/format_spec.lua` the buffer detection. The first two skip themselves when
-the binary, or duckdb, is not there.
+`tests/duckument_spec.lua` runs the commands end to end,
+`tests/format_spec.lua` the buffer detection, and `tests/download_spec.lua`
+holds the published triples and the release workflow to each other. The first
+two skip themselves when the binary, or duckdb, is not there; none of them
+touches the network.

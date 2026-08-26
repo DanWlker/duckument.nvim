@@ -3,11 +3,10 @@ vim.g.loaded_duckument = 1
 
 vim.api.nvim_create_user_command(
   'DuckU',
-  function(opts) require('duckument').query(opts.args, opts.bang) end,
+  function(opts) require('duckument').query(opts.args) end,
   {
     nargs = '*',
-    bang = true,
-    desc = 'Query this buffer with duckdb, replacing its contents (! skips prompts)',
+    desc = 'Query this buffer with duckdb, replacing its contents',
   }
 )
 

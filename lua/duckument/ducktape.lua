@@ -1,23 +1,27 @@
 --- The whole of the statement completion, in the `ducktape` binary
---- built alongside this plugin.
+--- built or fetched alongside this plugin.
 ---
 --- Everything that reads what you typed happens over there, on sqruff's lexer
 --- and parser: supplying the SELECT, naming the table a mutation writes to,
---- placing the FROM clauses, deciding what the statement does with the buffer.
---- This side hands over a string and takes back a statement -- there is no
---- second opinion here to keep in step with that one.
+--- placing the FROM clauses. This side hands over a string and takes back a
+--- statement -- there is no second opinion here to keep in step with that one.
 ---
---- The binary is therefore required. Build it with `make build`, or point
---- `vim.g.duckument_parse_binary` at one already built.
+--- The binary is therefore required. A checkout on a release tag fetches its
+--- own on first use (see `duckument.download`); otherwise build it with
+--- `make build`, or point `vim.g.duckument_parse_binary` at one already built.
+
+local download = require('duckument.download')
 
 local M = {}
 
-local MISSING = 'ducktape not found -- run `make build` in the plugin directory'
+local MISSING =
+  'ducktape not found -- fetching it, or run `make build` in the plugin directory'
 
 -- nil until the first attempt, false once the binary turns out to be missing --
 -- a checkout that never ran `make build` pays for one lookup and no more.
 local available = nil
 local binary
+local fetched = false
 
 ---@return string? path to the binary, once it has been looked for
 local function locate()
@@ -33,12 +37,16 @@ local function locate()
     return binary or nil
   end
 
-  -- Built in place by `make build`, or shipped next to the lua for a release.
-  local candidates = { 'src/target/release/ducktape', 'bin/ducktape' }
-  for _, relative in ipairs(candidates) do
-    local found = vim.api.nvim_get_runtime_file(relative, false)[1]
-    if found and vim.fn.executable(found) == 1 then
-      binary = found
+  -- Built or fetched in place, beside this very file; then, for a checkout
+  -- installed somewhere else entirely, wherever a packager left one.
+  local candidates = { download.path() }
+  for _, relative in ipairs({ 'src/target/release/ducktape', 'bin/ducktape' }) do
+    vim.list_extend(candidates, vim.api.nvim_get_runtime_file(relative, true))
+  end
+
+  for _, candidate in ipairs(candidates) do
+    if vim.fn.executable(candidate) == 1 then
+      binary = candidate
       return binary
     end
   end
@@ -47,24 +55,40 @@ local function locate()
   return nil
 end
 
+--- Goes and gets the binary, once a session, saying what came of it. Nothing
+--- waits on this: the query that found it missing has already been turned down,
+--- and the next one will find it there.
+local function fetch()
+  if fetched then return end
+  fetched = true
+
+  download.ensure(function(why)
+    if why then return vim.notify('duckument: ' .. why, vim.log.levels.WARN) end
+    M.reset()
+    vim.notify('duckument: ducktape is ready -- run that again')
+  end)
+end
+
 --- Whether the binary has been found. nil while that is still unknown.
 ---@return boolean?
 function M.available() return available end
 
 --- Completes what was typed into a statement duckdb will run.
 ---
---- Returns nil only when the binary could not be reached: it always has an
---- answer otherwise, falling back to its own token-driven completion for the
---- statements sqruff's duckdb dialect cannot read in full.
+--- Returns nil when the binary could not be reached, and when it read the
+--- statement but could not finish it -- sqruff's duckdb dialect does not stretch
+--- to every statement duckdb itself will take.
 ---@param args string
 ---@return string? statement
 ---@return string? why  why there is none, when there is none
 function M.complete(args)
-  if available == false then return nil, MISSING end
-
   local path = locate()
   if not path then
     available = false
+    -- Only when the looking was ours to do. A binary named outright, or the
+    -- lookup turned off, is a decision to leave alone rather than answer by
+    -- fetching something.
+    if vim.g.duckument_parse_binary == nil then fetch() end
     return nil, MISSING
   end
 
@@ -94,10 +118,11 @@ function M.complete(args)
 end
 
 --- Forgets where the binary was, so the next call looks again. For tests, and
---- for after building it mid-session.
+--- for after building or fetching it mid-session.
 function M.reset()
   available = nil
   binary = nil
+  fetched = false
 end
 
 return M

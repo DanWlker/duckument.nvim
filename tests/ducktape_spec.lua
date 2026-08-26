@@ -3,6 +3,17 @@
 
 local ducktape = require('duckument.ducktape')
 
+-- Every attempt to go and get a binary, so a spec can say that none was made.
+-- The real one is left in place otherwise; it never reaches the network from a
+-- working copy, having no release tag to match.
+local fetches = {}
+local download = require('duckument.download')
+local ensure = download.ensure
+download.ensure = function(done)
+  table.insert(fetches, true)
+  return ensure(done)
+end
+
 ducktape.reset()
 if not ducktape.complete('select 1 from t') then
   describe(
@@ -287,6 +298,9 @@ describe('falling back', function()
 
     assert.is_nil(ducktape.complete('select a'))
     assert.is_false(ducktape.available())
+    -- And nothing was fetched to make up for it: turning the lookup off is a
+    -- decision, not a gap to fill in.
+    assert.is_nil(fetches[1])
 
     vim.g.duckument_parse_binary = saved
     ducktape.reset()
@@ -299,6 +313,9 @@ describe('falling back', function()
 
     assert.is_nil(ducktape.complete('select a'))
     assert.is_false(ducktape.available())
+    -- And nothing was fetched to make up for it: turning the lookup off is a
+    -- decision, not a gap to fill in.
+    assert.is_nil(fetches[1])
 
     vim.g.duckument_parse_binary = saved
     ducktape.reset()
