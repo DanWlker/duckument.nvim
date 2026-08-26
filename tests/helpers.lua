@@ -21,9 +21,7 @@ end
 
 ---@param bufnr? integer
 ---@return string[]
-function M.lines(bufnr)
-  return vim.api.nvim_buf_get_lines(bufnr or 0, 0, -1, false)
-end
+function M.lines(bufnr) return vim.api.nvim_buf_get_lines(bufnr or 0, 0, -1, false) end
 
 --- A nameless, unsaved buffer holding `lines`, current when this returns.
 ---@param lines? string[]

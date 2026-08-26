@@ -1,12 +1,12 @@
 [package]
-name = "duckquery-parse"
+name = "ducktape"
 version = "0.1.0"
 edition = "2021"
 description = "Parse custom query formats"
 publish = false
 
 [[bin]]
-name = "duckquery-parse"
+name = "ducktape"
 path = "main.rs"
 
 [dependencies]

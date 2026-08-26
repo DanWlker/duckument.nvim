@@ -1,8 +1,8 @@
---- The file formats duckquery can read a buffer as, and write a result back in.
+--- The file formats duckument can read a buffer as, and write a result back in.
 --- A result always comes back in the format it went in as, so the buffer never
 --- changes shape underneath you.
 
----@class DuckqueryFormat
+---@class DuckumentFormat
 ---@field ext string          extension for the temp copy of an unsaved buffer
 ---@field reader string       duckdb table function used to read the source
 ---@field reader_args? string extra arguments for that table function
@@ -11,7 +11,7 @@
 
 local M = {}
 
----@type table<string, DuckqueryFormat>
+---@type table<string, DuckumentFormat>
 M.formats = {
   csv = { ext = 'csv', reader = 'read_csv', copy = 'FORMAT csv, HEADER' },
   tsv = {
@@ -60,7 +60,7 @@ local by_filetype = {
 --- What `bufnr` holds: its extension decides, since that is what a parquet
 --- buffer has to go on, and its filetype is the fallback for everything else.
 ---@param bufnr integer
----@return DuckqueryFormat?
+---@return DuckumentFormat?
 function M.detect(bufnr)
   local name = vim.api.nvim_buf_get_name(bufnr)
   local ext = name:match('%.([%w]+)$')

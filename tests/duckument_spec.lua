@@ -3,9 +3,7 @@
 local h = require('tests.helpers')
 
 if not h.has_duckdb() then
-  describe('duckquery', function()
-    pending('needs duckdb on $PATH')
-  end)
+  describe('duckument', function() pending('needs duckdb on $PATH') end)
   return
 end
 
@@ -39,14 +37,14 @@ describe('reading', function()
 
   it('aggregates', function()
     local bufnr = h.scratch()
-    assert.same({
-      'date,n',
-      '2025-10-15,2',
-      '2025-10-20,2',
-    }, h.run(
-      bufnr,
-      'Duck date, count(*) as n from this group by date order by date'
-    ))
+    assert.same(
+      {
+        'date,n',
+        '2025-10-15,2',
+        '2025-10-20,2',
+      },
+      h.run(bufnr, 'Duck date, count(*) as n from this group by date order by date')
+    )
   end)
 
   it('keeps a tsv a tsv on the way back', function()
@@ -79,8 +77,7 @@ describe('writing', function()
 
   it('keeps the rows an update did not touch, in order', function()
     local bufnr = h.scratch()
-    local after =
-      h.run(bufnr, "Duck update set amt = 0 where description = 'food'")
+    local after = h.run(bufnr, "Duck update set amt = 0 where description = 'food'")
     assert.equals(#h.rows, #after)
     assert.equals('2025-10-15,food,0', after[3])
   end)

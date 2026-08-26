@@ -1,12 +1,12 @@
---- duckquery: run duckdb over the buffer you are looking at.
+--- duckument: run duckdb over the buffer you are looking at.
 ---
 --- The buffer is handed to duckdb as `this` -- saved or not -- the statement is
---- completed by `duckquery.sqruff`, and the result comes back in the format it
+--- completed by `duckument.ducktape`, and the result comes back in the format it
 --- went out as, replacing the buffer's contents or, for a query that only
 --- reports on the data, rendering into a scratch window.
 
-local format = require('duckquery.format')
-local sqruff = require('duckquery.sqruff')
+local format = require('duckument.format')
+local ducktape = require('duckument.ducktape')
 
 local M = {}
 
@@ -18,7 +18,7 @@ local function quote(s) return "'" .. s:gsub("'", "''") .. "'" end
 
 --- What a statement does with the buffer: reads it, writes to it, or reports on
 --- it. Only what to do with the result turns on this.
----@alias DuckqueryKind 'read'|'write'|'inspect'
+---@alias DuckumentKind 'read'|'write'|'inspect'
 
 local kinds = {
   update = 'write',
@@ -32,7 +32,7 @@ local kinds = {
 --- binary has already supplied any missing SELECT and named any mutation's
 --- target -- so the first word settles it, and nothing here has to read SQL.
 ---@param statement string as the binary completed it
----@return DuckqueryKind
+---@return DuckumentKind
 local function kind_of(statement)
   return kinds[(statement:match('^%s*(%a+)') or ''):lower()] or 'read'
 end
@@ -40,7 +40,7 @@ end
 --- Resolves what duckdb should read for `bufnr`, dumping unsaved text to a temp
 --- file so the query sees the buffer rather than the file behind it.
 ---@param bufnr integer
----@param spec DuckqueryFormat
+---@param spec DuckumentFormat
 ---@return string? path
 ---@return string? temp path to clean up
 ---@return string? error
@@ -69,19 +69,19 @@ local function source_for(bufnr, spec)
   return temp, temp
 end
 
----@class DuckqueryJob
+---@class DuckumentJob
 ---@field bufnr integer
----@field spec DuckqueryFormat
+---@field spec DuckumentFormat
 ---@field src string
 ---@field temp? string
 ---@field source string statement exposing the buffer's data as `this`
 ---@field query string
----@field kind DuckqueryKind
+---@field kind DuckumentKind
 
 --- Everything a command needs before shelling out, or nil after reporting why.
 ---@param bufnr integer
 ---@param args string
----@return DuckqueryJob?
+---@return DuckumentJob?
 local function prepare(bufnr, args)
   if vim.fn.executable('duckdb') ~= 1 then
     err('duckdb executable not found in $PATH')
@@ -100,7 +100,7 @@ local function prepare(bufnr, args)
     return nil
   end
 
-  local query, why = sqruff.complete(args)
+  local query, why = ducktape.complete(args)
   if not query then
     err(why or 'could not complete that statement')
     return nil
@@ -148,7 +148,7 @@ end
 
 --- Runs `job` for display only, dropping the result into a scratch window and
 --- leaving every buffer that holds real data alone.
----@param job DuckqueryJob
+---@param job DuckumentJob
 local function show(job)
   local script = job.source
     .. job.query

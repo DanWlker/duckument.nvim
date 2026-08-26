@@ -1,13 +1,14 @@
 -- The whole of the statement completion, which lives in the binary. Skips
 -- itself unless it has been built (`make build`).
 
-local sqruff = require('duckquery.sqruff')
+local ducktape = require('duckument.ducktape')
 
-sqruff.reset()
-if not sqruff.complete('select 1 from t') then
-  describe('sqruff', function()
-    pending('needs target/release/duckquery-parse -- run `make build`')
-  end)
+ducktape.reset()
+if not ducktape.complete('select 1 from t') then
+  describe(
+    'sqruff',
+    function() pending('needs target/release/ducktape -- run `make build`') end
+  )
   return
 end
 
@@ -15,11 +16,10 @@ end
 ---@param args string
 ---@return string
 local function complete(args)
-  local completed = sqruff.complete(args)
+  local completed = ducktape.complete(args)
   assert.is_truthy(completed, 'no answer for: ' .. args)
   return completed
 end
-
 
 describe('splicing', function()
   it('names the buffer as the source of a select without one', function()
@@ -48,19 +48,25 @@ describe('splicing', function()
     assert.equals('select * from this', complete('-- only a comment'))
   end)
 
-  it('leaves a comment marker inside a string alone', function()
-    assert.equals(
-      "select * from this where note = '-- not a comment'",
-      complete("where note = '-- not a comment'")
-    )
-  end)
+  it(
+    'leaves a comment marker inside a string alone',
+    function()
+      assert.equals(
+        "select * from this where note = '-- not a comment'",
+        complete("where note = '-- not a comment'")
+      )
+    end
+  )
 
-  it('reaches both branches of a union', function()
-    assert.equals(
-      'select a from this where b > 1 union select c from this',
-      complete('select a where b > 1 union select c')
-    )
-  end)
+  it(
+    'reaches both branches of a union',
+    function()
+      assert.equals(
+        'select a from this where b > 1 union select c from this',
+        complete('select a where b > 1 union select c')
+      )
+    end
+  )
 
   it('reaches nested selects, innermost offsets first', function()
     assert.equals(
@@ -133,12 +139,15 @@ describe('supplying the select', function()
     assert.equals('summarize select amt from this', complete('summarize select amt'))
   end)
 
-  it('leaves a mutation unprefixed', function()
-    assert.equals(
-      'update this set amt = (select max(amt) from this) where a = 1',
-      complete('update this set amt = (select max(amt)) where a = 1')
-    )
-  end)
+  it(
+    'leaves a mutation unprefixed',
+    function()
+      assert.equals(
+        'update this set amt = (select max(amt) from this) where a = 1',
+        complete('update this set amt = (select max(amt)) where a = 1')
+      )
+    end
+  )
 end)
 
 describe('naming what a mutation writes to', function()
@@ -163,25 +172,28 @@ describe('putting the from where the parse stopped', function()
       'select a, count(*) from this group by a',
       complete('a, count(*) group by a')
     )
-    assert.equals(
-      'select a from this group by a',
-      complete('select a group by a')
-    )
+    assert.equals('select a from this group by a', complete('select a group by a'))
   end)
 
-  it('finishes a having the same way', function()
-    assert.equals(
-      'select a from this having count(*) > 1',
-      complete('select a having count(*) > 1')
-    )
-  end)
+  it(
+    'finishes a having the same way',
+    function()
+      assert.equals(
+        'select a from this having count(*) > 1',
+        complete('select a having count(*) > 1')
+      )
+    end
+  )
 
-  it('still reaches the selects nested inside one', function()
-    assert.equals(
-      'select a, (select max(b) from this) as m from this group by a',
-      complete('a, (select max(b)) as m group by a')
-    )
-  end)
+  it(
+    'still reaches the selects nested inside one',
+    function()
+      assert.equals(
+        'select a, (select max(b) from this) as m from this group by a',
+        complete('a, (select max(b)) as m group by a')
+      )
+    end
+  )
 
   it('supplies a select a subquery was written without', function()
     -- The bracket parses as far as it can and holds the rest as unreadable,
@@ -219,8 +231,8 @@ describe('putting the from where the parse stopped', function()
   it('refuses a splice that does not actually help', function()
     -- The repair is only taken if the result reads. Putting a FROM in front of
     -- something unreadable for another reason fixes nothing.
-    assert.is_nil(sqruff.complete('select a, xyz!! group by a'))
-    assert.is_nil(sqruff.complete('select from from from'))
+    assert.is_nil(ducktape.complete('select a, xyz!! group by a'))
+    assert.is_nil(ducktape.complete('select from from from'))
   end)
 end)
 
@@ -235,59 +247,61 @@ describe('turning down what it cannot read', function()
       'from this select a',
       'pivot this on description using sum(amt)',
     }) do
-      local completed, why = sqruff.complete(args)
+      local completed, why = ducktape.complete(args)
       assert.is_nil(completed, args)
       assert.is_truthy(why, args)
     end
   end)
 
   it('says which it was: no binary, or no reading it', function()
-    local _, why = sqruff.complete('from this select a')
+    local _, why = ducktape.complete('from this select a')
     assert.is_nil(why:match('make build'))
 
-    local saved = vim.g.duckquery_parse_binary
-    sqruff.reset()
-    vim.g.duckquery_parse_binary = '/nonexistent/duckquery-parse'
+    local saved = vim.g.duckument_parse_binary
+    ducktape.reset()
+    vim.g.duckument_parse_binary = '/nonexistent/ducktape'
 
-    local _, missing = sqruff.complete('select a')
+    local _, missing = ducktape.complete('select a')
     assert.is_truthy(missing:match('make build'))
 
-    vim.g.duckquery_parse_binary = saved
-    sqruff.reset()
+    vim.g.duckument_parse_binary = saved
+    ducktape.reset()
   end)
 
-  it('does not read keywords out of a string', function()
-    assert.equals(
-      "select * from this where note = 'group by x'",
-      complete("where note = 'group by x'")
-    )
-  end)
+  it(
+    'does not read keywords out of a string',
+    function()
+      assert.equals(
+        "select * from this where note = 'group by x'",
+        complete("where note = 'group by x'")
+      )
+    end
+  )
 end)
 
 describe('falling back', function()
-
   it('can be turned off outright', function()
-    local saved = vim.g.duckquery_parse_binary
-    sqruff.reset()
-    vim.g.duckquery_parse_binary = false
+    local saved = vim.g.duckument_parse_binary
+    ducktape.reset()
+    vim.g.duckument_parse_binary = false
 
-    assert.is_nil(sqruff.complete('select a'))
-    assert.is_false(sqruff.available())
+    assert.is_nil(ducktape.complete('select a'))
+    assert.is_false(ducktape.available())
 
-    vim.g.duckquery_parse_binary = saved
-    sqruff.reset()
+    vim.g.duckument_parse_binary = saved
+    ducktape.reset()
   end)
 
   it('reports itself missing when the binary is not there', function()
-    local saved = vim.g.duckquery_parse_binary
-    sqruff.reset()
-    vim.g.duckquery_parse_binary = '/nonexistent/duckquery-parse'
+    local saved = vim.g.duckument_parse_binary
+    ducktape.reset()
+    vim.g.duckument_parse_binary = '/nonexistent/ducktape'
 
-    assert.is_nil(sqruff.complete('select a'))
-    assert.is_false(sqruff.available())
+    assert.is_nil(ducktape.complete('select a'))
+    assert.is_false(ducktape.available())
 
-    vim.g.duckquery_parse_binary = saved
-    sqruff.reset()
+    vim.g.duckument_parse_binary = saved
+    ducktape.reset()
   end)
 end)
 
@@ -299,8 +313,8 @@ describe('edges', function()
     -- be spliced into text the parse never saw:
     --     select descripci from thisón, count(*) group by descripción
     local truncated = 'descripción, count(*) group by descripción'
-    assert.is_nil(sqruff.complete(truncated))
-    assert.is_nil(sqruff.complete('señor, count(*) group by señor'))
+    assert.is_nil(ducktape.complete(truncated))
+    assert.is_nil(ducktape.complete('señor, count(*) group by señor'))
   end)
 
   it('keeps multibyte the lexer does read', function()
@@ -361,13 +375,16 @@ describe('edges', function()
     )
   end)
 
-  it('mends every level of a nest, one parse at a time', function()
-    assert.equals(
-      'select * from this where a in '
-        .. '(select b from this where c in (select d from this where e > 1))',
-      complete('where a in (b where c in (d where e > 1))')
-    )
-  end)
+  it(
+    'mends every level of a nest, one parse at a time',
+    function()
+      assert.equals(
+        'select * from this where a in '
+          .. '(select b from this where c in (select d from this where e > 1))',
+        complete('where a in (b where c in (d where e > 1))')
+      )
+    end
+  )
 
   it('does not mistake a keyword inside brackets for the opening one', function()
     -- The first word of `(select max(amt)) as peak, cat` sits inside a bracket:
@@ -386,7 +403,7 @@ describe('edges', function()
   it('names a relation only where the statement plainly has none', function()
     -- A statement that already says what it acts on is unreadable for some
     -- other reason, and wedging a second relation into it mends nothing.
-    assert.is_nil(sqruff.complete('update t set x = 1 group by y'))
+    assert.is_nil(ducktape.complete('update t set x = 1 group by y'))
   end)
 
   it('leaves a statement this dialect cannot read to duckdb', function()
@@ -396,15 +413,13 @@ describe('edges', function()
     -- not silent either: duckdb answers `syntax error at or near "table"`,
     -- naming the word, which beats refusing it here without saying which.
     assert.equals('select table this from this', complete('table this'))
-    assert.equals(
-      'select describe foo from this bar',
-      complete('describe foo bar')
-    )
+    assert.equals('select describe foo from this bar', complete('describe foo bar'))
   end)
 
-  it('completes a from-first statement it can read', function()
-    assert.equals('select * from t', complete('from t'))
-  end)
+  it(
+    'completes a from-first statement it can read',
+    function() assert.equals('select * from t', complete('from t')) end
+  )
 
   it('does not take a relation keyword out of a bracket either', function()
     -- The head of a statement is its *first* word, not the first word found
@@ -414,7 +429,7 @@ describe('edges', function()
       'select (select delete from this where y > 1) from this',
       complete('(delete where y > 1)')
     )
-    assert.is_nil(sqruff.complete('(update set x = 1)'))
+    assert.is_nil(ducktape.complete('(update set x = 1)'))
   end)
 
   it('leaves a bracket that reads perfectly well as an expression', function()

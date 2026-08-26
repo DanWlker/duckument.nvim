@@ -1,4 +1,4 @@
---- The whole of the statement completion, in the `duckquery-parse` binary
+--- The whole of the statement completion, in the `ducktape` binary
 --- built alongside this plugin.
 ---
 --- Everything that reads what you typed happens over there, on sqruff's lexer
@@ -8,12 +8,11 @@
 --- second opinion here to keep in step with that one.
 ---
 --- The binary is therefore required. Build it with `make build`, or point
---- `vim.g.duckquery_parse_binary` at one already built.
+--- `vim.g.duckument_parse_binary` at one already built.
 
 local M = {}
 
-local MISSING =
-  'duckquery-parse not found -- run `make build` in the plugin directory'
+local MISSING = 'ducktape not found -- run `make build` in the plugin directory'
 
 -- nil until the first attempt, false once the binary turns out to be missing --
 -- a checkout that never ran `make build` pays for one lookup and no more.
@@ -24,7 +23,7 @@ local binary
 local function locate()
   if binary ~= nil then return binary or nil end
 
-  local configured = vim.g.duckquery_parse_binary
+  local configured = vim.g.duckument_parse_binary
   if configured == false then
     binary = false
     return nil
@@ -35,8 +34,7 @@ local function locate()
   end
 
   -- Built in place by `make build`, or shipped next to the lua for a release.
-  local candidates =
-    { 'src/target/release/duckquery-parse', 'bin/duckquery-parse' }
+  local candidates = { 'src/target/release/ducktape', 'bin/ducktape' }
   for _, relative in ipairs(candidates) do
     local found = vim.api.nvim_get_runtime_file(relative, false)[1]
     if found and vim.fn.executable(found) == 1 then
@@ -71,9 +69,11 @@ function M.complete(args)
   end
 
   local payload = vim.json.encode({ statement = args, table = 'this' })
-  local ok, res = pcall(function()
-    return vim.system({ path }, { stdin = payload, text = true }):wait(10000)
-  end)
+  local ok, res = pcall(
+    function()
+      return vim.system({ path }, { stdin = payload, text = true }):wait(10000)
+    end
+  )
   if not ok or res.code ~= 0 then
     available = false
     return nil, MISSING

@@ -2,7 +2,7 @@
 
 build:
 	@cd src && cargo build --release
-	@echo "built src/target/release/duckquery-parse"
+	@echo "built src/target/release/ducktape"
 
 test:
 	@./tests/run_tests.sh

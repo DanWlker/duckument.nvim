@@ -1,4 +1,4 @@
-# nvim-duckquery
+# nvim-duckument
 
 Run [DuckDB](https://duckdb.org) over the buffer you are looking at.
 
@@ -22,24 +22,24 @@ on disk.
 ## Requirements
 
 Neovim 0.11+, the `duckdb` CLI on your `$PATH`, and a Rust toolchain to build
-the `duckquery-parse` binary that does the statement completion — `make build`,
+the `ducktape` binary that does the statement completion — `make build`,
 once. See [how the statement gets completed](#how-the-statement-gets-completed).
 
 ## Install
 
 ```lua
-vim.pack.add({ 'https://github.com/DanWlker/nvim-duckquery' })
+vim.pack.add({ 'https://github.com/DanWlker/nvim-duckument' })
 ```
 
 There is nothing to call — no `setup()`, no configuration.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `:Duck {statement}` | Runs the statement and replaces the buffer with the result. `u` undoes it. |
-| `:Duck! {statement}` | The same, without the confirmation a parquet file needs before being rewritten. |
-| `:DuckPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone. |
+| Command                    | What it does                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `:Duck {statement}`        | Runs the statement and replaces the buffer with the result. `u` undoes it.      |
+| `:Duck! {statement}`       | The same, without the confirmation a parquet file needs before being rewritten. |
+| `:DuckPreview {statement}` | Renders the result in a scratch window and leaves every buffer alone.           |
 
 `:Duck` with no argument reads the whole buffer back through duckdb. `DESCRIBE`
 and `SUMMARIZE` render like `:DuckPreview`, since writing a description of your
@@ -50,19 +50,19 @@ data over the data would be a poor trade.
 The buffer answers to `this`. Anything you spell out yourself is left as you
 wrote it — naming your own `FROM` opts straight out of all of this.
 
-| You write | duckdb runs |
-| --- | --- |
-| *(nothing)* | `select * from this` |
-| `where amt > 100` | `select * from this where amt > 100` |
+| You write                      | duckdb runs                                     |
+| ------------------------------ | ----------------------------------------------- |
+| _(nothing)_                    | `select * from this`                            |
+| `where amt > 100`              | `select * from this where amt > 100`            |
 | `date, count(*) group by date` | `select date, count(*) from this group by date` |
-| `update set amt = 0` | `update this set amt = 0` |
-| `delete where amt is null` | `delete from this where amt is null` |
-| `insert values ('a', 1)` | `insert into this values ('a', 1)` |
-| `describe` | `describe from this` |
+| `update set amt = 0`           | `update this set amt = 0`                       |
+| `delete where amt is null`     | `delete from this where amt is null`            |
+| `insert values ('a', 1)`       | `insert into this values ('a', 1)`              |
+| `describe`                     | `describe from this`                            |
 
 ## How the statement gets completed
 
-All of it happens in `duckquery-parse`, a small Rust binary over
+All of it happens in `ducktape`, a small Rust binary over
 [sqruff](https://github.com/quarylabs/sqruff). Neovim hands it the string you
 typed and takes back a statement; nothing on the lua side reads your SQL.
 
@@ -74,7 +74,7 @@ another reading of your SQL.
 
 **From the parse, and only from the parse.** sqruff reads the statement and its
 tree says where the FROM clauses belong. Because it parses leniently and keeps
-every byte it read, the answer is an *offset* — the FROM is spliced in and
+every byte it read, the answer is an _offset_ — the FROM is spliced in and
 nothing else is touched:
 
 ```
@@ -104,7 +104,7 @@ The result has to read afterwards, so a splice that fixes nothing is thrown
 away rather than emitted.
 
 A missing `SELECT` is supplied the same way: try nothing, then `select `, then
-`select * `, and keep the first whose tree is *usable*. Usable means more than
+`select * `, and keep the first whose tree is _usable_. Usable means more than
 "it parsed" — `select where amt > 100` parses quite happily, an empty projection
 being valid grammar, and would become `select from this where amt > 100`, which
 duckdb rejects. Each candidate's SELECT has to actually select something.
@@ -124,11 +124,11 @@ would be read as a DELETE.
 A statement sqruff cannot read in full is turned down, not guessed at. Its
 duckdb dialect stops short of a few things, and those are errors now:
 
-| not read | write it as |
-| --- | --- |
-| `select * qualify rn = 1` | — |
-| `select * from this tablesample 10 percent` | — |
-| `from this select a` | `select a from this` |
+| not read                                    | write it as          |
+| ------------------------------------------- | -------------------- |
+| `select * qualify rn = 1`                   | —                    |
+| `select * from this tablesample 10 percent` | —                    |
+| `from this select a`                        | `select a from this` |
 
 Clauses also have to be in the order SQL wants them; a join written before the
 clause it should follow is reported by duckdb rather than rearranged.
@@ -149,15 +149,15 @@ make build       # cd src && cargo build --release
 ```
 
 The binary is **required** — it is where the completion lives. The plugin looks
-for `src/target/release/duckquery-parse` and then `bin/duckquery-parse` on its
-runtimepath; point `vim.g.duckquery_parse_binary` at one somewhere else.
+for `src/target/release/ducktape` and then `bin/ducktape` on its
+runtimepath; point `vim.g.duckument_parse_binary` at one somewhere else.
 
 With `vim.pack`, building on install and update:
 
 ```lua
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
-    if ev.data.spec.name == 'nvim-duckquery' and ev.data.kind ~= 'delete' then
+    if ev.data.spec.name == 'nvim-duckument' and ev.data.kind ~= 'delete' then
       local crate = ev.data.path .. '/src'
       vim.system({ 'cargo', 'build', '--release' }, { cwd = crate }):wait()
     end
@@ -202,7 +202,7 @@ make test     # or ./tests/run_tests.sh
 
 Runs on [plenary.nvim](https://github.com/nvim-lua/plenary.nvim), cloned into
 your neovim data directory if it is not already installed.
-`tests/sqruff_spec.lua` covers the statement completion,
-`tests/duckquery_spec.lua` runs the commands end to end, and
+`tests/ducktape_spec.lua` covers the statement completion,
+`tests/duckument_spec.lua` runs the commands end to end, and
 `tests/format_spec.lua` the buffer detection. The first two skip themselves when
 the binary, or duckdb, is not there.
