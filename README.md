@@ -1,6 +1,6 @@
 # duckument.nvim
 
-## NOTE: Yes this is vibe coded. Yes I will clean this up. Yes I am in the process of cleaning it up. Yes I'm using this myself. Yes I reviewed the generated code.
+## NOTE: Yes this is vibe coded. Yes I will clean this up. Yes I am in the process of cleaning it up. Yes I'm using this myself. Yes I review the code, in the process of reviewing all the code. The binary will be in "releases" once I have reviewed everything.
 
 Run [DuckDB](https://duckdb.org) over the buffer you are looking at.
 
