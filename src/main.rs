@@ -120,9 +120,11 @@ fn parse(linter: &Linter, sql: &str) -> Option<ErasedSegment> {
 /// `sql`, was read in full, and every SELECT in it actually selects something.
 fn usable(tree: &ErasedSegment, sql: &str) -> bool {
     covers(tree, sql)
-        && !has_unparsable(tree)
+        && !has_unparsable(tree) // DESCRIBE, UPDATE, DELETE already stops here
         && projections_are_present(tree)
-        && sources_are_named(tree)
+        && sources_are_named(tree) // SELECT can be SELECT 1, but this plugin is for querying a csv
+                                   // so by default the assumption is SELECT without from-ing this
+                                   // csv file is dumb
 }
 
 /// True when every SELECT in `tree` says what it reads from.
