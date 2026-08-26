@@ -29,34 +29,35 @@
 use std::io::Read;
 use std::ops::Range;
 
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use sqruff_lib::core::config::FluffConfig;
 use sqruff_lib::core::linter::core::Linter;
 use sqruff_lib_core::dialects::syntax::{SyntaxKind, SyntaxSet};
 use sqruff_lib_core::parser::segments::{ErasedSegment, Tables};
 
-/// Keywords that may open a query on their own. Anything else means the
-/// statement was typed as a bare select list, or a bare clause.
-const OPENING: [&str; 9] = [
-    "select",
-    "with",
-    "from",
-    "describe",
-    "summarize",
-    "pivot",
-    "unpivot",
-    "table",
-    "values",
-];
+/// Whether a word opens a query on its own, and so must never be offered a
+/// SELECT in front of it: a keyword this dialect has no grammar for reads
+/// perfectly well as a column name, and `describe` would quietly become
+/// `select describe`.
+fn opens_a_query(word: &str) -> bool {
+    matches!(
+        word,
+        "select"
+            | "with"
+            | "from"
+            | "describe"
+            | "summarize"
+            | "pivot"
+            | "unpivot"
+            | "table"
+            | "values"
+    )
+}
 
-/// Statements that write rather than read.
-const MUTATION: [&str; 3] = ["update", "delete", "insert"];
-
-/// Statements taking the buffer as their one operand: `DESCRIBE this`,
-/// `SUMMARIZE this`. Written bare, there is nothing in the text for a parser to
-/// find, so the buffer is named for them -- the same repair a mutation's target
-/// needs, and checked the same way, by parsing what it produced.
-const NEEDS_OPERAND: [&str; 2] = ["describe", "summarize"];
+/// Whether a word starts a statement that writes rather than reads.
+fn mutates(word: &str) -> bool {
+    matches!(word, "update" | "delete" | "insert")
+}
 
 /// Every descendant of `segment` of this kind, `segment` itself included.
 fn crawl(segment: &ErasedSegment, kind: SyntaxKind) -> Vec<ErasedSegment> {
@@ -82,66 +83,27 @@ fn lex(config: &FluffConfig, sql: &str) -> Vec<ErasedSegment> {
     segments
 }
 
-/// A bare word sitting at paren depth zero, and where it ends -- which is where
-/// the name of a mutation's target has to go.
-struct Word {
-    text: String,
-    end: usize,
-}
-
-/// The depth-zero words of a statement, which is all that is read here: what it
-/// opens with, and what a mutation writes to. Strings and comments never appear
-/// -- the lexer hands those back whole, so a keyword written inside one is not a
-/// keyword to us either.
-fn scan(config: &FluffConfig, sql: &str) -> Vec<Word> {
-    let mut words = Vec::new();
+/// What the statement opens with, lowercased, or "" if it opens with nothing.
+///
+/// The only thing read from the text rather than the parse, and only because it
+/// decides what may be *put in front of* the statement before there is a parse
+/// to read. Strings and comments never answer -- the lexer hands those back
+/// whole, so a keyword written inside one is not a keyword here either. Nor
+/// does anything inside brackets: `(select max(amt)) as peak` opens a select
+/// *list*, not a query, and refusing it a prefix leaves it unreadable.
+fn opening_word(config: &FluffConfig, sql: &str) -> String {
     let mut depth = 0usize;
 
     for segment in lex(config, sql) {
         match segment.get_type() {
             SyntaxKind::StartBracket => depth += 1,
             SyntaxKind::EndBracket => depth = depth.saturating_sub(1),
-            SyntaxKind::Word if depth == 0 => {
-                if let Some(at) = span(&segment) {
-                    words.push(Word {
-                        text: segment.raw().to_lowercase(),
-                        end: at.end,
-                    });
-                }
-            }
+            SyntaxKind::Word if depth == 0 => return segment.raw().to_lowercase(),
             _ => {}
         }
     }
 
-    words
-}
-
-/// What the statement opens with, lowercased, or "" if it opens with nothing.
-fn first_word(words: &[Word]) -> &str {
-    words.first().map_or("", |word| word.text.as_str())
-}
-
-/// Names `table` as the target of a mutation that left its own out:
-/// `update set x = 1`, `delete where x`, `insert values (...)`.
-///
-/// This is the one repair no parser can make for us -- there is no table in the
-/// text to find -- so it happens before anything tries to read the statement.
-fn name_target(sql: &str, words: &[Word], table: &str) -> String {
-    let Some(head) = words.first() else {
-        return sql.to_string();
-    };
-    let next = words.get(1).map(|word| word.text.as_str());
-
-    let addition = match head.text.as_str() {
-        "update" if next == Some("set") => format!(" {table}"),
-        "delete" if next != Some("from") => format!(" from {table}"),
-        "insert" if next != Some("into") => format!(" into {table}"),
-        _ => return sql.to_string(), // it already names what it writes to
-    };
-
-    let mut named = sql.to_string();
-    named.insert_str(head.end, &addition);
-    named
+    String::new()
 }
 
 /// Everything but the comments.
@@ -186,11 +148,12 @@ fn missing_froms(tree: &ErasedSegment) -> Vec<usize> {
 /// therefore not yet a tree that can be fixed; one with nothing between SELECT
 /// and the next clause has to be turned down so the next candidate is tried.
 fn projections_are_present(tree: &ErasedSegment) -> bool {
-    crawl(tree, SyntaxKind::SelectStatement).iter().all(|select| {
-        child(select, SyntaxKind::SelectClause).is_some_and(|clause| {
-            child(&clause, SyntaxKind::SelectClauseElement).is_some()
+    crawl(tree, SyntaxKind::SelectStatement)
+        .iter()
+        .all(|select| {
+            let clause = child(select, SyntaxKind::SelectClause);
+            clause.is_some_and(|clause| child(&clause, SyntaxKind::SelectClauseElement).is_some())
         })
-    })
 }
 
 /// True when sqruff could not read part of the statement. Its guess about the
@@ -206,7 +169,10 @@ const PREFIXES: [&str; 3] = ["", "select ", "select * "];
 
 /// The tree sqruff makes of `sql`, however much of it it could read.
 fn parse(linter: &Linter, sql: &str) -> Option<ErasedSegment> {
-    linter.parse_string(&Tables::default(), sql, None).ok()?.tree
+    linter
+        .parse_string(&Tables::default(), sql, None)
+        .ok()?
+        .tree
 }
 
 /// Whether `tree` is one to finish a statement from: it accounts for all of
@@ -252,9 +218,56 @@ impl Repair {
     }
 }
 
+/// The relation a statement never named, read off the statement the parser
+/// could not make anything of.
+///
+/// `update set x = 1` names no table, and sqruff says so plainly: the whole
+/// statement comes back as one unreadable node rather than `set` being taken
+/// for a table. Which relation is missing, and where it goes, then follows from
+/// the opening keyword and the position the parse gives for it.
+///
+/// The keyword has to be the first thing in the unreadable stretch, exactly as
+/// it has to be the first thing in the statement for a SELECT to be withheld
+/// from it. A word reached only by opening a bracket is a column name, not a
+/// statement: `(delete where y > 1)` is a subquery written without its SELECT,
+/// and reading its `delete` as a statement turns a projection into a DELETE.
+fn missing_relation(unreadable: &ErasedSegment, table: &str) -> Option<Repair> {
+    let mut code = unreadable
+        .segments()
+        .iter()
+        .filter(|segment| segment.is_code());
+
+    let head = code
+        .next()
+        .filter(|first| first.is_type(SyntaxKind::Word))?;
+    let next = code
+        .find(|segment| segment.is_type(SyntaxKind::Word))
+        .map(|word| word.raw().to_lowercase());
+
+    // Each arm names the relation only when the statement plainly has none: an
+    // UPDATE going straight to its SET, a DELETE or INSERT without its
+    // preposition, a bare DESCRIBE or SUMMARIZE. A statement that already says
+    // what it acts on is unreadable for some other reason, and wedging a second
+    // relation into it mends nothing.
+    let text = match head.raw().to_lowercase().as_str() {
+        "update" if next.as_deref() == Some("set") => table.to_string(),
+        "delete" if next.as_deref() != Some("from") => format!("from {table}"),
+        "insert" if next.as_deref() != Some("into") => format!("into {table}"),
+        // DESCRIBE and SUMMARIZE take the relation as their whole operand.
+        "describe" | "summarize" if next.is_none() => table.to_string(),
+        _ => return None,
+    };
+
+    Some(Repair {
+        at: span(head)?.end,
+        text,
+        spaced: true,
+    })
+}
+
 /// The first place a statement needs mending, if it needs mending anywhere.
 ///
-/// Two shapes, both of which the parse points straight at:
+/// Three shapes, each of which the parse points straight at:
 ///
 /// A **select clause holding something unreadable** is a missing FROM. GROUP BY
 /// and HAVING do not end a select list the way WHERE and ORDER BY do, so with
@@ -264,18 +277,28 @@ impl Repair {
 /// A **bracket holding something unreadable** is a subquery written without its
 /// SELECT: `(b where c > 1)` parses as far as `b` and no further.
 ///
+/// A **whole statement the parser could not read**, opening with a keyword that
+/// acts on a relation, never named the relation: `update set x = 1`, `describe`.
+///
 /// Only the first site is returned. Everything past an unreadable stretch is
 /// held as raw words rather than parsed, so a second site inside one is not
 /// visible until the first has been mended and the statement read again.
 fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
+    // A statement that did not parse at all sits unreadable at the root.
+    let unnamed = child(tree, SyntaxKind::Unparsable)
+        .and_then(|statement| missing_relation(&statement, table));
+
     let clauses = crawl(tree, SyntaxKind::SelectClause);
     let brackets = crawl(tree, SyntaxKind::Bracketed);
 
-    let missing_from = clauses.iter().filter_map(unparsable_child).map(|at| Repair {
-        at,
-        text: format!("from {table} "),
-        spaced: true,
-    });
+    let missing_from = clauses
+        .iter()
+        .filter_map(unparsable_child)
+        .map(|at| Repair {
+            at,
+            text: format!("from {table} "),
+            spaced: true,
+        });
 
     let missing_select = brackets
         .iter()
@@ -288,7 +311,11 @@ fn repair_site(tree: &ErasedSegment, table: &str) -> Option<Repair> {
             spaced: false,
         });
 
-    missing_from.chain(missing_select).min_by_key(|site| site.at)
+    unnamed
+        .into_iter()
+        .chain(missing_from)
+        .chain(missing_select)
+        .min_by_key(|site| site.at)
 }
 
 /// Where the first unreadable child of `segment` starts.
@@ -328,6 +355,9 @@ fn completed(
             if usable(&tree, &candidate) {
                 return Some((prefix, candidate, tree, repairs));
             }
+            if repairs == MAX_REPAIRS {
+                break; // one more mend could not be checked anyway
+            }
             let Some(site) = repair_site(&tree, table) else {
                 break; // unreadable for a reason no insertion will mend
             };
@@ -338,11 +368,72 @@ fn completed(
     None
 }
 
-fn complete(statement: &str, table: &str) -> Value {
+/// What was asked for: a statement, and the name the buffer answers to.
+///
+/// Both are optional twice over: absent, and present as null. A caller whose
+/// JSON encoder writes an unset field out as `null` rather than leaving it off
+/// means the same thing by it, and is answered the same way.
+#[derive(Deserialize)]
+struct Request {
+    #[serde(default)]
+    statement: Option<String>,
+    #[serde(default)]
+    table: Option<String>,
+}
+
+impl Request {
+    fn statement(&self) -> &str {
+        self.statement.as_deref().unwrap_or("")
+    }
+
+    fn table(&self) -> &str {
+        self.table.as_deref().unwrap_or("this")
+    }
+}
+
+/// How a statement came to read: as typed, or after being mended.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Strategy {
+    Parsed,
+    Repaired,
+}
+
+/// What is written back, in the one shape the caller may rely on.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Answer {
+    Completed {
+        /// Always true. The caller branches on it before reading anything else.
+        ok: bool,
+        sql: String,
+        strategy: Strategy,
+        repairs: usize,
+        injected: usize,
+        /// The SELECT put in front, if one was needed.
+        supplied: Option<&'static str>,
+    },
+    Refused {
+        /// Always false.
+        ok: bool,
+        error: String,
+    },
+}
+
+impl Answer {
+    fn refused(why: impl Into<String>) -> Self {
+        Answer::Refused {
+            ok: false,
+            error: why.into(),
+        }
+    }
+}
+
+fn complete(statement: &str, table: &str) -> Answer {
     let config = FluffConfig::from_source("[sqruff]\ndialect = duckdb\n", None);
     let linter = match Linter::new(config, None, None, false) {
         Ok(linter) => linter,
-        Err(why) => return json!({ "ok": false, "error": why }),
+        Err(why) => return Answer::refused(why),
     };
     // Borrowed back rather than kept alongside: cloning it copies the whole
     // duckdb grammar the linter has just been handed.
@@ -352,71 +443,53 @@ fn complete(statement: &str, table: &str) -> Value {
     let trimmed = stripped.trim();
     let statement = if trimmed.is_empty() { "*" } else { trimmed };
 
-    let words = scan(config, statement);
-    let first = first_word(&words);
-    let writes = MUTATION.contains(&first);
+    // The one thing decided before there is a parse to read: whether a SELECT
+    // may be put in front. Everything a statement is missing *within* itself is
+    // found by parsing it and mending what the parse points at.
+    let opening = opening_word(config, statement);
+    let supply = !opens_a_query(&opening) && !mutates(&opening);
 
-    // A mutation is named before anything reads it, and never prefixed.
-    let mut named = name_target(statement, &words, table);
-    let supply = !writes && !OPENING.contains(&first);
+    let Some((prefix, candidate, tree, repairs)) = completed(&linter, statement, supply, table)
+    else {
+        return Answer::refused("sqruff could not read the whole statement");
+    };
 
-    // A bare DESCRIBE or SUMMARIZE has nothing to work on. Both take a table,
-    // and the buffer is one, so name it.
-    if NEEDS_OPERAND.contains(&first) && words.len() == 1 {
-        named = format!("{named} {table}");
+    let mut insertions = missing_froms(&tree);
+    let mut sql = candidate;
+    let addition = format!(" from {table}");
+
+    // Highest offset first, so each insertion leaves the ones still to come
+    // where the parse found them. Tree order will not do: a nested SELECT is
+    // crawled after the one holding it but sits earlier in the text.
+    insertions.sort_unstable();
+    for at in insertions.iter().rev() {
+        sql.insert_str(*at, &addition);
     }
 
-    let found = completed(&linter, &named, supply, table);
-    if let Some((prefix, candidate, tree, repairs)) = found {
-        let mut insertions = missing_froms(&tree);
-        let mut sql = candidate;
-        let addition = format!(" from {table}");
-
-        // Highest offset first, so each insertion leaves the ones still to come
-        // where the parse found them. Tree order will not do: a nested SELECT is
-        // crawled after the one holding it but sits earlier in the text.
-        insertions.sort_unstable();
-        for at in insertions.iter().rev() {
-            sql.insert_str(*at, &addition);
-        }
-
-        return json!({
-            "ok": true,
-            "sql": sql,
-            "strategy": if repairs == 0 { "parsed" } else { "repaired" },
-            "repairs": repairs,
-            "injected": insertions.len(),
-            "supplied": if prefix.is_empty() {
-                Value::Null
-            } else {
-                json!(prefix)
-            },
-        });
+    Answer::Completed {
+        ok: true,
+        sql,
+        strategy: if repairs == 0 {
+            Strategy::Parsed
+        } else {
+            Strategy::Repaired
+        },
+        repairs,
+        injected: insertions.len(),
+        supplied: (!prefix.is_empty()).then_some(prefix),
     }
-
-    json!({ "ok": false, "error": "sqruff could not read the whole statement" })
 }
 
 fn main() {
     let mut input = String::new();
-    if std::io::stdin().read_to_string(&mut input).is_err() {
-        println!(
-            "{}",
-            json!({ "ok": false, "error": "could not read stdin" })
-        );
-        return;
-    }
-
-    let payload: Value = match serde_json::from_str(&input) {
-        Ok(payload) => payload,
-        Err(why) => {
-            println!("{}", json!({ "ok": false, "error": why.to_string() }));
-            return;
+    let answer = if std::io::stdin().read_to_string(&mut input).is_err() {
+        Answer::refused("could not read stdin")
+    } else {
+        match serde_json::from_str::<Request>(&input) {
+            Ok(request) => complete(request.statement(), request.table()),
+            Err(why) => Answer::refused(why.to_string()),
         }
     };
 
-    let statement = payload["statement"].as_str().unwrap_or("");
-    let table = payload["table"].as_str().unwrap_or("this");
-
-    println!("{}", complete(statement, table));
+    println!("{}", serde_json::to_string(&answer).unwrap());
 }

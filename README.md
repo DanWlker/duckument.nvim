@@ -109,11 +109,15 @@ A missing `SELECT` is supplied the same way: try nothing, then `select `, then
 being valid grammar, and would become `select from this where amt > 100`, which
 duckdb rejects. Each candidate's SELECT has to actually select something.
 
-Two repairs happen before any of that, because there is nothing in the text for
-a parser to find: naming the table a mutation writes to (`update set x = 1`),
-and giving a bare `describe` or `summarize` the buffer to work on (`describe` →
-`describe this`). Both are then checked by parsing the result like anything
-else.
+A statement that never named the relation it acts on is mended the same way,
+off the same parse. `update set x = 1` comes back as one unreadable node rather
+than `set` being mistaken for a table, and which relation is missing — and where
+it goes — follows from the keyword the node opens with: naming the table a
+mutation writes to (`update set x = 1` → `update this set x = 1`), and giving a
+bare `describe` or `summarize` the buffer to work on (`describe` → `describe
+this`). The keyword has to open the statement, not merely appear first inside a
+bracket, or `(delete where y > 1)` — a subquery written without its SELECT —
+would be read as a DELETE.
 
 ### What it will not do
 

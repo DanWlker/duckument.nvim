@@ -10,6 +10,7 @@ name = "duckquery-parse"
 path = "main.rs"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqruff-lib = "0.40"
 sqruff-lib-core = "0.40"

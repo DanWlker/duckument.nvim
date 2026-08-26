@@ -354,6 +354,38 @@ describe('edges', function()
     )
   end)
 
+  it('does not mistake a keyword inside brackets for the opening one', function()
+    -- The first word of `(select max(amt)) as peak, cat` sits inside a bracket:
+    -- the statement opens a select *list*, not a query, and refusing it a
+    -- SELECT in front leaves it unreadable.
+    assert.equals(
+      'select (select max(amt) from this) as peak, cat from this group by cat',
+      complete('(select max(amt)) as peak, cat group by cat')
+    )
+    assert.equals(
+      'select (select 1 from this) as x from this',
+      complete('(select 1) as x')
+    )
+  end)
+
+  it('names a relation only where the statement plainly has none', function()
+    -- A statement that already says what it acts on is unreadable for some
+    -- other reason, and wedging a second relation into it mends nothing.
+    assert.is_nil(sqruff.complete('update t set x = 1 group by y'))
+    assert.is_nil(sqruff.complete('describe foo bar'))
+  end)
+
+  it('does not take a relation keyword out of a bracket either', function()
+    -- The head of a statement is its *first* word, not the first word found
+    -- anywhere in it. A column named `delete` inside a subquery does not make
+    -- the statement a DELETE.
+    assert.equals(
+      'select (select delete from this where y > 1) from this',
+      complete('(delete where y > 1)')
+    )
+    assert.is_nil(sqruff.complete('(update set x = 1)'))
+  end)
+
   it('leaves a bracket that reads perfectly well as an expression', function()
     -- `(d)` is a column in parentheses, not a subquery missing its SELECT.
     -- Nothing in it is unreadable, so there is nothing to mend and no guess
