@@ -87,10 +87,10 @@ function M.complete(args)
   end
 
   available = true
-  if not decoded.ok then
-    return nil, decoded.error or 'could not complete that statement'
-  end
-  return decoded.sql
+  -- The statement, or why there is none: whichever field came back is the
+  -- answer, and there is always exactly one of them.
+  if decoded.sql then return decoded.sql end
+  return nil, decoded.error or 'could not complete that statement'
 end
 
 --- Forgets where the binary was, so the next call looks again. For tests, and

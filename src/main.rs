@@ -19,8 +19,8 @@
 //!
 //! Reads {"statement": ..., "table": ...} on stdin and writes one of:
 //!
-//!     {"ok": true, "sql": ..., "strategy": "parsed", ...}
-//!     {"ok": false, "error": ...}
+//!     {"sql": ...}
+//!     {"error": ...}
 //!
 //! What the completed statement *does* with the buffer is not reported: it
 //! opens with the keyword that says so, every repair having already been made,
@@ -301,7 +301,7 @@ fn unparsable_child(segment: &ErasedSegment) -> Option<usize> {
 /// How many times a statement may be mended before we call it unreadable. Each
 /// round fixes one level, and a statement nested deeper than this is not one
 /// anybody typed at a `:Duck` prompt.
-const MAX_REPAIRS: usize = 8;
+const MAX_REPAIRS: usize = 16;
 
 /// The first prefix under which the statement reads, mending it as far as the
 /// parse will show the way.
@@ -311,22 +311,18 @@ const MAX_REPAIRS: usize = 8;
 /// offered a SELECT, and what comes of that must parse like anything else. A
 /// statement this dialect has no grammar for -- PIVOT, TABLE -- is refused, or
 /// completes into something duckdb then names the offending keyword in.
-fn completed(
-    linter: &Linter,
-    statement: &str,
-    table: &str,
-) -> Option<(&'static str, String, usize)> {
+fn completed(linter: &Linter, statement: &str, table: &str) -> Option<String> {
     for &prefix in PREFIXES.iter() {
         let mut candidate = format!("{prefix}{statement}");
 
-        for repairs in 0..=MAX_REPAIRS {
+        for round in 0..=MAX_REPAIRS {
             let Some(tree) = parse(linter, &candidate) else {
                 break;
             };
             if usable(&tree, &candidate) {
-                return Some((prefix, candidate, repairs));
+                return Some(candidate);
             }
-            if repairs == MAX_REPAIRS {
+            if round == MAX_REPAIRS {
                 break; // one more mend could not be checked anyway
             }
             let sites = repair_sites(&tree, table);
@@ -365,40 +361,18 @@ impl Request {
     }
 }
 
-/// How a statement came to read: as typed, or after being mended.
-#[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Strategy {
-    Parsed,
-    Repaired,
-}
-
-/// What is written back, in the one shape the caller may rely on.
+/// What is written back: the statement, or why there is none. Which one it is
+/// the caller reads off the field that is there.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Answer {
-    Completed {
-        /// Always true. The caller branches on it before reading anything else.
-        ok: bool,
-        sql: String,
-        strategy: Strategy,
-        repairs: usize,
-        /// The SELECT put in front, if one was needed.
-        supplied: Option<&'static str>,
-    },
-    Refused {
-        /// Always false.
-        ok: bool,
-        error: String,
-    },
+    Completed { sql: String },
+    Refused { error: String },
 }
 
 impl Answer {
     fn refused(why: impl Into<String>) -> Self {
-        Answer::Refused {
-            ok: false,
-            error: why.into(),
-        }
+        Answer::Refused { error: why.into() }
     }
 }
 
@@ -416,20 +390,9 @@ fn complete(statement: &str, table: &str) -> Answer {
     let trimmed = stripped.trim();
     let statement = if trimmed.is_empty() { "*" } else { trimmed };
 
-    let Some((prefix, candidate, repairs)) = completed(&linter, statement, table) else {
-        return Answer::refused("sqruff could not read the whole statement");
-    };
-
-    Answer::Completed {
-        ok: true,
-        sql: candidate,
-        strategy: if repairs == 0 {
-            Strategy::Parsed
-        } else {
-            Strategy::Repaired
-        },
-        repairs,
-        supplied: (!prefix.is_empty()).then_some(prefix),
+    match completed(&linter, statement, table) {
+        Some(sql) => Answer::Completed { sql },
+        None => Answer::refused("sqruff could not read the whole statement"),
     }
 }
 
