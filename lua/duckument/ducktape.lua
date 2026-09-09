@@ -39,7 +39,7 @@ local function locate()
 
   -- Built or fetched in place, beside this very file; then, for a checkout
   -- installed somewhere else entirely, wherever a packager left one.
-  local candidates = { download.path() }
+  local candidates = { download.binary_path }
   for _, relative in ipairs({ 'src/target/release/ducktape', 'bin/ducktape' }) do
     vim.list_extend(candidates, vim.api.nvim_get_runtime_file(relative, true))
   end
@@ -62,7 +62,7 @@ local function fetch()
   if fetched then return end
   fetched = true
 
-  download.ensure(function(why)
+  download.ensure_downloaded(function(why)
     if why then return vim.notify('duckument: ' .. why, vim.log.levels.WARN) end
     M.reset()
     vim.notify('duckument: ducktape is ready -- run that again')

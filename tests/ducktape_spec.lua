@@ -8,10 +8,10 @@ local ducktape = require('duckument.ducktape')
 -- working copy, having no release tag to match.
 local fetches = {}
 local download = require('duckument.download')
-local ensure = download.ensure
-download.ensure = function(done)
+local ensure_downloaded = download.ensure_downloaded
+download.ensure_downloaded = function(done)
   table.insert(fetches, true)
-  return ensure(done)
+  return ensure_downloaded(done)
 end
 
 ducktape.reset()
