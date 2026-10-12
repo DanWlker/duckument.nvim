@@ -1,5 +1,5 @@
-if vim.g.loaded_duckument == 1 then return end
-vim.g.loaded_duckument = 1
+if vim.g.loaded_duckument then return end
+vim.g.loaded_nvim_duckument = true
 
 -- `!` on either command hands the statement to duckdb exactly as typed, with
 -- nothing filled in: the buffer is still `this`, but the whole statement is
