@@ -34,6 +34,7 @@ vim.api.nvim_create_autocmd('PackChanged', {
   desc = 'Build ducktape after duckument.nvim is installed or updated',
   callback = function(ev)
     local data = ev.data
+    print(vim.inspect(ev))
     if data.kind ~= 'install' and data.kind ~= 'update' then return end
     if vim.uv.fs_realpath(data.path) ~= vim.uv.fs_realpath(root) then return end
 
