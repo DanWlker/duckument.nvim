@@ -25,10 +25,9 @@ undoes it and the file is untouched until you `:w`.
 
 Neovim 0.11+ and the `duckdb` CLI on your `$PATH`.
 
-The statement completion lives in `ducktape`, a small Rust binary. A tagged
-install fetches the build for your platform the first time you run a command; a
-checkout of `main` builds it with one `make build`, which wants a Rust
-toolchain. See [getting the binary](#getting-the-binary).
+The statement completion lives in `ducktape`, a small Rust binary. The plugin
+builds it with cargo when `vim.pack` installs or updates it, so you also need a
+Rust toolchain. See [getting the binary](#getting-the-binary).
 
 ## Install
 
@@ -180,56 +179,32 @@ rather than emitted.
 
 ## Getting the binary
 
-The binary is **required** — it is where the completion lives — and there are
-two ways to have one.
+The binary is **required**, because it holds the statement completion. The
+plugin builds it with cargo, so you need a Rust toolchain.
 
-**A tagged install fetches it.** Every release publishes a `ducktape` build per
-platform. When your checkout sits exactly on one of those tags, the first
-command that needs the binary and cannot find it fetches that release's build in
-the background and says so when it lands; run the command again and it works.
-Nothing blocks on the download, and nothing is fetched again afterwards.
+**vim.pack builds it for you.** When `vim.pack` installs or updates this plugin,
+the plugin runs `cargo build --release` in the background. A message tells you
+when the build is done. You do not need a `PackChanged` hook of your own.
 
-Builds are published for:
+**First use builds it too.** If a command cannot find the binary, the plugin
+starts the same build and tells you when it is ready. Run the command again
+after that. This covers plugin managers other than `vim.pack`.
 
-|         | x86_64             | aarch64            |
-| ------- | ------------------ | ------------------ |
-| macOS   | ✓                  | ✓                  |
-| Linux   | ✓ (glibc and musl) | ✓ (glibc and musl) |
-| Windows | ✓                  | ✓                  |
-
-**Anything else builds it.** A checkout on `main`, or a platform with no
-published build, has no release to match and is told to build instead:
+**Or build it yourself:**
 
 ```sh
-make build       # cd src && cargo build --release
+make build       # cd src && cargo build --release --target-dir ../out
 ```
 
-With `vim.pack`, on install and update:
+All of these put the binary in `out/release/ducktape`.
 
-```lua
-vim.api.nvim_create_autocmd('PackChanged', {
-  callback = function(ev)
-    if ev.data.spec.name == 'duckument.nvim' and ev.data.kind ~= 'delete' then
-      local crate = ev.data.path .. '/src'
-      vim.system({ 'cargo', 'build', '--release' }, { cwd = crate }):wait()
-    end
-  end,
-})
-```
-
-Both end up in the same place, `src/target/release/ducktape`, and a binary you
-built is never replaced by a downloaded one: no version stamp beside it means
-cargo put it there, and that build is the one you meant to run.
-
-If none of this suits, these are the knobs:
+To use a different binary, set this knob:
 
 |                                |                                                                         |
 | ------------------------------ | ----------------------------------------------------------------------- |
 | `vim.g.duckument_parse_binary` | Path to a `ducktape` of your own. `false` disables the lookup entirely. |
-| `vim.g.duckument_download`     | `false` to never fetch, and only ever build.                            |
-| `vim.g.duckument_version`      | Fetch this release rather than the tag you are on.                      |
-| `vim.g.duckument_triple`       | Fetch this target triple rather than the detected one.                  |
-| `vim.g.duckument_repo`         | Fetch from this `owner/repo` — for a fork.                              |
+
+When you set this knob, the plugin does not build a binary on first use.
 
 Without a binary, `:DuckU!` still works: it never needed one.
 
@@ -249,7 +224,6 @@ Runs on [plenary.nvim](https://github.com/nvim-lua/plenary.nvim), which has to
 be installed already — the suite will not fetch it for you.
 `tests/ducktape_spec.lua` covers the statement completion,
 `tests/duckument_spec.lua` runs the commands end to end,
-`tests/format_spec.lua` the buffer detection, and `tests/download_spec.lua`
-holds the published triples and the release workflow to each other. The first
-two skip themselves when the binary, or duckdb, is not there; none of them
-touches the network.
+and `tests/format_spec.lua` the buffer detection. The first two skip
+themselves when the binary, or duckdb, is not there; none of them touches the
+network.

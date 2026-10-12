@@ -3,22 +3,16 @@
 
 local ducktape = require('duckument.ducktape')
 
--- Every attempt to go and get a binary, so a spec can say that none was made.
--- The real one is left in place otherwise; it never reaches the network from a
--- working copy, having no release tag to match.
-local fetches = {}
-local download = require('duckument.download')
-local ensure_downloaded = download.ensure_downloaded
-download.ensure_downloaded = function(done)
-  table.insert(fetches, true)
-  return ensure_downloaded(done)
-end
+-- Every attempt to build a binary, so a spec can say that none was made. None
+-- is actually run: a spec has no business starting cargo.
+local builds = {}
+require('duckument.build').run = function() table.insert(builds, true) end
 
 ducktape.reset()
 if not ducktape.complete('select 1 from t') then
   describe(
     'sqruff',
-    function() pending('needs target/release/ducktape -- run `make build`') end
+    function() pending('needs out/release/ducktape -- run `make build`') end
   )
   return
 end
@@ -298,9 +292,9 @@ describe('falling back', function()
 
     assert.is_nil(ducktape.complete('select a'))
     assert.is_false(ducktape.available())
-    -- And nothing was fetched to make up for it: turning the lookup off is a
+    -- And nothing was built to make up for it: turning the lookup off is a
     -- decision, not a gap to fill in.
-    assert.is_nil(fetches[1])
+    assert.is_nil(builds[1])
 
     vim.g.duckument_parse_binary = saved
     ducktape.reset()
@@ -313,9 +307,9 @@ describe('falling back', function()
 
     assert.is_nil(ducktape.complete('select a'))
     assert.is_false(ducktape.available())
-    -- And nothing was fetched to make up for it: turning the lookup off is a
+    -- And nothing was built to make up for it: turning the lookup off is a
     -- decision, not a gap to fill in.
-    assert.is_nil(fetches[1])
+    assert.is_nil(builds[1])
 
     vim.g.duckument_parse_binary = saved
     ducktape.reset()
