@@ -24,8 +24,8 @@ undoes it and the file is untouched until you `:w`.
 Neovim 0.11+ and the `duckdb` CLI on your `$PATH`.
 
 The statement completion lives in `ducktape`, a small Rust binary. The plugin
-builds it with cargo when `vim.pack` installs or updates it, so you also need a
-Rust toolchain. See [getting the binary](#getting-the-binary).
+builds it with cargo on first use or when you run `:DuckBuild`, so you also need
+a Rust toolchain. See [getting the binary](#getting-the-binary).
 
 ## Install
 
@@ -33,7 +33,9 @@ Rust toolchain. See [getting the binary](#getting-the-binary).
 vim.pack.add({ 'https://github.com/DanWlker/duckument.nvim' })
 ```
 
-There is no `setup()` to call, and nothing that has to be configured.
+There is no `setup()` to call, and nothing that has to be configured. To
+rebuild the binary on each update, see
+[rebuild on install and update](#rebuild-on-install-and-update).
 
 ## Commands
 
@@ -180,15 +182,40 @@ rather than emitted.
 The binary is **required**, because it holds the statement completion. The
 plugin builds it with cargo, so you need a Rust toolchain.
 
-**vim.pack builds it for you.** When `vim.pack` installs or updates this plugin,
-the plugin runs `cargo build --release` in the background. A message tells you
-when the build is done. You do not need a `PackChanged` hook of your own.
+**First use builds it.** If a command cannot find the binary, the plugin runs
+`cargo build --release` in the background. A message tells you when the build is
+done. Run the command again after that.
 
-**First use builds it too.** If a command cannot find the binary, the plugin
-starts the same build and tells you when it is ready. Run the command again
-after that. This covers plugin managers other than `vim.pack`.
+**`:DuckBuild` rebuilds it.** Run this command after you update the plugin. The
+build runs in the background, and a message tells you when it is done.
 
-**Or build it yourself:**
+### Rebuild on install and update
+
+We recommend a `PackChanged` autocommand in your config. Then `vim.pack` runs
+`:DuckBuild` each time it installs or updates this plugin. Put the autocommand
+before the `vim.pack.add()` call. If you do not, it does not exist when the
+install occurs.
+
+```lua
+vim.api.nvim_create_autocmd('PackChanged', {
+  callback = function(ev)
+    local name, kind = ev.data.spec.name, ev.data.kind
+    if name ~= 'duckument.nvim' then return end
+    if kind ~= 'install' and kind ~= 'update' then return end
+
+    -- On install, the plugin is not loaded yet, so :DuckBuild does not exist.
+    if not ev.data.active then vim.cmd.packadd('duckument.nvim') end
+    vim.cmd.DuckBuild()
+  end,
+})
+
+vim.pack.add({ 'https://github.com/DanWlker/duckument.nvim' })
+```
+
+The plugin cannot set up this autocommand itself. `vim.pack` sends
+`PackChanged` before it loads the plugin, so the plugin does not see the event.
+
+### Build it yourself
 
 ```sh
 make build       # cd src && cargo build --release --target-dir ../out

@@ -1,6 +1,5 @@
 --- Building the `ducktape` binary with cargo, in place: `make build` without the
---- make. Run by the plugin itself whenever vim.pack installs or updates it, and
---- on first use when no binary is there at all.
+--- make. Run by `:DuckBuild`, and on first use when no binary is there at all.
 ---
 --- Asynchronous, like everything that touches the binary from the editor: the
 --- build takes as long as cargo takes, and nothing waits on it.

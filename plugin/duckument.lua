@@ -24,25 +24,13 @@ vim.api.nvim_create_user_command(
   }
 )
 
--- Rebuild `ducktape` whenever vim.pack installs or updates this plugin, so the
--- binary always matches the lua beside it. Matched on the plugin's directory
--- rather than its name, which the spec is free to change.
-local root = vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)))
-
-vim.api.nvim_create_autocmd('PackChanged', {
-  group = vim.api.nvim_create_augroup('duckument_build', { clear = true }),
-  desc = 'Build ducktape after duckument.nvim is installed or updated',
-  callback = function(ev)
-    local data = ev.data
-    print(vim.inspect(ev))
-    if data.kind ~= 'install' and data.kind ~= 'update' then return end
-    if vim.uv.fs_realpath(data.path) ~= vim.uv.fs_realpath(root) then return end
-
-    vim.notify('duckument: building ducktape')
-    require('duckument.build').run(function(why)
-      if why then return vim.notify('duckument: ' .. why, vim.log.levels.WARN) end
-      require('duckument.ducktape').reset()
-      vim.notify('duckument: ducktape is built')
-    end)
-  end,
-})
+-- Rebuild `ducktape` in place. A `PackChanged` autocmd cannot do this on
+-- install: vim.pack fires it before this file is ever sourced.
+vim.api.nvim_create_user_command('DuckBuild', function()
+  vim.notify('duckument: building ducktape')
+  require('duckument.build').run(function(why)
+    if why then return vim.notify('duckument: ' .. why, vim.log.levels.WARN) end
+    require('duckument.ducktape').reset()
+    vim.notify('duckument: ducktape is built')
+  end)
+end, { desc = 'Build the ducktape binary with cargo' })

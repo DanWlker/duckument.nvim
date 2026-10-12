@@ -6,9 +6,9 @@
 --- placing the FROM clauses. This side hands over a string and takes back a
 --- statement -- there is no second opinion here to keep in step with that one.
 ---
---- The binary is therefore required. The plugin builds it whenever vim.pack
---- installs or updates it, and on first use when it is missing (see
---- `duckument.build`); otherwise build it with `make build`, or point
+--- The binary is therefore required. The plugin builds it on `:DuckBuild`, and on
+--- first use when it is missing (see `duckument.build`); otherwise build it
+--- with `make build`, or point
 --- `vim.g.duckument_parse_binary` at one already built.
 
 local build = require('duckument.build')
